@@ -1,0 +1,17 @@
+{
+  "name": "raymarchcity",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "verify": "node verify.mjs",
+    "serve": "npx serve -l 5173 ."
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "devDependencies": {
+    "playwright": "^1.63.0"
+  },
+  "type": "module"
+}
