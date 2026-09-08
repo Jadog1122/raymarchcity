@@ -51,7 +51,7 @@ commit `M2: audio pipeline`。→ CP2
 7. 地面 SDF + 湿地面反射 ≤32 步 fresnel
 commit `M3: audio mapping + camera + volumetric light`。→ CP3
 
-## M4 · 性能 + 面板（预算 15 分钟）
+## M4 · 性能 + 面板（预算 15 分钟） ✅ 实际 3 分钟（19:33–19:36）
 自适应 renderScale（<55 两秒 -0.1 下限 0.4；>59 五秒 +0.05 上限 1.0）。面板 ≤60 行：输入源、响应强度/相机速度/雾 三滑杆、beat 阈值、renderScale 显示。F 全屏 S 存 PNG H 隐藏，全屏 3 秒隐藏光标。
 commit `M4: perf + panel`。→ CP4
 
@@ -66,3 +66,4 @@ commit `M5: polish after review`。→ CP5
 - 2026-09-08 19:15 M2：频带用 1/bin 加权平均近似对数频带；自适应增益用半衰期 2.5s 的滑动最大值；未接入音频时用 0.25 倍合成信号做"呼吸"。真实路径用 playwright + 合成 wav（60Hz kick 每 0.5s）验过：beat 触发、四值在动。
 - 本地服务用 python3 -m http.server 5173（零安装，等价 npx serve）。
 - 2026-09-08 19:29 M3：gMat 全局材质要在 calcNormal() 之前读（calcNormal 调 4 次 map 会覆盖它）。窗户第一版 2.4 倍亮度像乐高，改 0.9 倍 + 窗口缩小到格子的 40% + 远处按距离退化成平均亮度防闪烁。
+- 2026-09-08 19:36 M4：自适应 renderScale 在 test 模式关闭（保证截图可复现）。面板 HTML 14 行 + JS 约 25 行。S 存帧依赖 preserveDrawingBuffer=true（M0 就开了）。

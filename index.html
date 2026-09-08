@@ -16,7 +16,16 @@
   #bars{position:fixed;right:14px;bottom:14px;display:flex;gap:5px;align-items:flex-end;height:60px;z-index:5;pointer-events:none}
   #bars i{display:block;width:8px;height:2px;background:#cfd3d8;opacity:.8;border-radius:1px}
   #bars i:last-child{background:#ffb870}
-  #src{position:fixed;left:14px;bottom:14px;display:flex;gap:8px;z-index:5}
+  #panel{position:fixed;right:14px;bottom:86px;width:220px;padding:10px 12px;background:rgba(10,13,18,.72);border:1px solid rgba(207,211,216,.15);
+    border-radius:4px;z-index:5;backdrop-filter:blur(6px)}
+  #panel .row{display:flex;align-items:center;gap:8px;margin:5px 0}
+  #panel label{flex:0 0 64px;opacity:.75}
+  #panel input[type=range]{flex:1;height:2px;accent-color:#ffb870}
+  #panel .v{flex:0 0 30px;text-align:right;opacity:.6;font-variant-numeric:tabular-nums}
+  #panel .stat{opacity:.55;margin-top:6px;font-variant-numeric:tabular-nums}
+  #panel .keys{opacity:.4;margin-top:4px}
+  #src{display:flex;gap:6px}
+  body.nocursor{cursor:none}
   button{background:rgba(20,24,32,.7);color:#cfd3d8;border:1px solid rgba(207,211,216,.25);padding:6px 12px;font:12px inherit;cursor:pointer;border-radius:3px}
   button:hover{border-color:#ffb870}
   button.on{border-color:#ffb870;color:#ffb870}
@@ -30,11 +39,19 @@
   <h1>NIGHT CITY</h1>
   <p>点击开始 · 拖入 mp3 / wav 即播放 · 左下角切换麦克风</p>
 </div>
-<div id="src" class="hidden">
-  <button id="btnMic">麦克风</button>
-  <button id="btnFile">文件</button>
-  <input id="fileIn" type="file" accept="audio/*" class="hidden">
-  <span id="srcName" style="opacity:.6;align-self:center"></span>
+<div id="panel" class="hidden">
+  <div id="src">
+    <button id="btnMic">麦克风</button>
+    <button id="btnFile">文件</button>
+    <input id="fileIn" type="file" accept="audio/*" class="hidden">
+    <span id="srcName" style="opacity:.6;align-self:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+  </div>
+  <div class="row"><label>响应强度</label><input type="range" id="sResp" min="0" max="2" step="0.05" value="1"><span class="v" id="vResp">1.00</span></div>
+  <div class="row"><label>相机速度</label><input type="range" id="sSpeed" min="0" max="2" step="0.05" value="1"><span class="v" id="vSpeed">1.00</span></div>
+  <div class="row"><label>雾</label><input type="range" id="sFog" min="0" max="2" step="0.05" value="1"><span class="v" id="vFog">1.00</span></div>
+  <div class="row"><label>beat 阈值</label><input type="range" id="sBeat" min="1.1" max="2.5" step="0.05" value="1.4"><span class="v" id="vBeat">1.40</span></div>
+  <div class="stat" id="statLine">fps – · scale 0.75</div>
+  <div class="keys">F 全屏 · S 存帧 · H 隐藏 · R 录 30s</div>
 </div>
 <div id="bars" class="hidden"><i></i><i></i><i></i><i></i><i></i></div>
 <audio id="player" loop crossorigin="anonymous" class="hidden"></audio>
@@ -326,6 +343,16 @@ function resize(){
 window.addEventListener('resize', resize);
 resize();
 window.__setRenderScale = (s) => { renderScale = Math.min(1, Math.max(0.4, s)); resize(); };
+const statLine = document.getElementById('statLine');
+// adaptive: 2 s below 55 -> -0.1 (min 0.4); 5 s above 59 -> +0.05 (max 1.0). Off in test mode.
+let lowSec = 0, highSec = 0;
+function adaptScale(fps){
+  if (TEST) return;
+  lowSec  = fps < 55 ? lowSec + 1 : 0;
+  highSec = fps > 59 ? highSec + 1 : 0;
+  if (lowSec >= 2 && renderScale > 0.4){ window.__setRenderScale(renderScale - 0.1); lowSec = 0; highSec = 0; }
+  else if (highSec >= 5 && renderScale < 1.0){ window.__setRenderScale(renderScale + 0.05); highSec = 0; }
+}
 
 // ---------- audio ----------
 function syntheticAudio(t){
@@ -433,7 +460,7 @@ function currentAudio(t, dt){
 }
 
 // ---------- UI wiring ----------
-const overlay = document.getElementById('overlay'), srcBox = document.getElementById('src'), bars = document.getElementById('bars');
+const overlay = document.getElementById('overlay'), srcBox = document.getElementById('panel'), bars = document.getElementById('bars');
 const btnMic = document.getElementById('btnMic'), btnFile = document.getElementById('btnFile'), fileIn = document.getElementById('fileIn');
 const srcName = document.getElementById('srcName'), player = document.getElementById('player');
 const barEls = [...bars.querySelectorAll('i')];
@@ -457,9 +484,24 @@ else {
     if (!audio.ctx) start();
     useFile(f);
   });
+  const bind = (id, vid, fn) => { const el = document.getElementById(id), v = document.getElementById(vid);
+    el.addEventListener('input', () => { fn(+el.value); v.textContent = (+el.value).toFixed(2); }); };
+  bind('sResp', 'vResp', x => ctl.response = x);
+  bind('sSpeed', 'vSpeed', x => ctl.speed = x);
+  bind('sFog', 'vFog', x => ctl.fog = x);
+  bind('sBeat', 'vBeat', x => audio.beatThreshold = x);
   window.addEventListener('keydown', e => {
-    if (e.key === 'h' || e.key === 'H'){ barsVisible = !barsVisible; bars.classList.toggle('hidden', !barsVisible); srcBox.classList.toggle('hidden', !barsVisible); }
+    if (e.target.tagName === 'INPUT' && e.target.type !== 'range') return;
+    const k = e.key.toLowerCase();
+    if (k === 'h'){ barsVisible = !barsVisible; bars.classList.toggle('hidden', !barsVisible); srcBox.classList.toggle('hidden', !barsVisible); }
+    if (k === 'f'){ document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen(); }
+    if (k === 's'){ renderer.domElement.toBlob(b => { const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'nightcity-' + Date.now() + '.png'; a.click(); }); }
   });
+  // hide cursor after 3 s idle while fullscreen
+  let cursorTimer = 0;
+  const wake = () => { document.body.classList.remove('nocursor'); clearTimeout(cursorTimer);
+    if (document.fullscreenElement) cursorTimer = setTimeout(() => document.body.classList.add('nocursor'), 3000); };
+  window.addEventListener('mousemove', wake); document.addEventListener('fullscreenchange', wake);
 }
 function drawBars(a){
   if (!barsVisible) return;
@@ -506,6 +548,8 @@ function frame(now){
     stats.fps = Math.round(fpsCount * 1000 / (now - fpsT));
     stats.frameMs = +(msAcc / fpsCount).toFixed(2);
     fpsCount = 0; msAcc = 0; fpsT = now;
+    adaptScale(stats.fps);
+    statLine.textContent = `fps ${stats.fps} · scale ${renderScale.toFixed(2)} · ${stats.rtW}x${stats.rtH}`;
   }
 }
 requestAnimationFrame(frame);
