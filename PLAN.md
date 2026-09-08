@@ -30,7 +30,7 @@ window.__stats 和 ?test=1。verify.mjs。
 点击开始遮罩 → AudioContext。麦克风按钮；拖 mp3/wav 播放。Analyser fftSize 2048，bass/mid/high/energy，滑动最大值归一，不对称平滑（0.4/0.08）。beat：bass > 1s 滑动平均 1.4 倍且 >200ms，uBeat=1 后 8Hz 指数衰减。右下角 5 根柱子，H 隐藏。?test=1 仍合成。
 commit `M2: audio pipeline`。→ CP2
 
-## M3 · 映射 + 相机 + 体积光（预算 25 分钟，硬止损） ✅ 7 步全部完成，实际 12 分钟（19:17–19:29）
+## M3 · 映射 + 相机 + 体积光（预算 25 分钟，硬止损） ✅ 7 步全部完成，实际 3 分钟（19:27–19:29）
 方案：
 - 相机 z 在 JS 里积分（速度依赖 energy，shader 里不能积分），新 uniform uCamZ；test 模式 uCamZ = 16。高度 2.6（平均楼高 7.6 的 1/3）+ 微 bob，横向 sin 漂移 ±0.6，俯仰 sin 微量。
 - 新 uniform uParams = (响应强度, 雾倍率, 相机速度, 预留)，M4 滑杆直接用，默认 (1,1,1,0)。
