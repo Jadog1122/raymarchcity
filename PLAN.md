@@ -26,7 +26,7 @@ window.__stats 和 ?test=1。verify.mjs。
 
 验收：截图是像样的夜城。commit `M1: city sdf + lighting + fog`。→ CP1
 
-## M2 · 音频管线（预算 15 分钟）
+## M2 · 音频管线（预算 15 分钟） ✅ 实际 6 分钟（19:09–19:15）
 点击开始遮罩 → AudioContext。麦克风按钮；拖 mp3/wav 播放。Analyser fftSize 2048，bass/mid/high/energy，滑动最大值归一，不对称平滑（0.4/0.08）。beat：bass > 1s 滑动平均 1.4 倍且 >200ms，uBeat=1 后 8Hz 指数衰减。右下角 5 根柱子，H 隐藏。?test=1 仍合成。
 commit `M2: audio pipeline`。→ CP2
 
@@ -54,3 +54,5 @@ commit `M5: polish after review`。→ CP5
 - 2026-09-08 19:08 M1：第一版曝光像白天（albedo 0.24、key 0.85、雾 0.032 都按白天量级给的）。改为夜景量级：albedo 0.13、key 0.6×、雾 0.011、天空地平线 0.11。规则：夜景场景所有线性量从 0.1 量级起步。
 - three.js 锁 0.170.0（jsdelivr）。RawShaderMaterial + GLSL3，自己声明 precision/out。
 - 街区：CELL=8，街道半宽 2.0，楼半宽 1–2，楼在格内随机平移但不进街道；domain repetition 用「到格边界距离 + 2.0」做步长上界保证不穿邻格。
+- 2026-09-08 19:15 M2：频带用 1/bin 加权平均近似对数频带；自适应增益用半衰期 2.5s 的滑动最大值；未接入音频时用 0.25 倍合成信号做"呼吸"。真实路径用 playwright + 合成 wav（60Hz kick 每 0.5s）验过：beat 触发、四值在动。
+- 本地服务用 python3 -m http.server 5173（零安装，等价 npx serve）。
