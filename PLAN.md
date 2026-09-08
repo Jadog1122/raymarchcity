@@ -2,13 +2,13 @@
 
 开始时间：2026-09-08 19:01
 
-## M0 · 骨架 + 验证回路（预算 15 分钟） ✅ 实际 10 分钟（19:01–19:11）
+## M0 · 骨架 + 验证回路（预算 15 分钟） ✅ 实际 3 分钟（19:01–19:04）
 index.html：importmap three.js，全屏 quad + ShaderMaterial，resize，uniforms iTime/iResolution/uAudio/uBeat/uScale。
 fragment shader 先输出渐变，预留 map()/raymarch()/calcNormal()/render()。renderScale 用小 render target 拉伸。
 window.__stats 和 ?test=1。verify.mjs。
 验收：verify 对渐变通过。commit `M0: skeleton + verify loop`。
 
-## M1 · 城市 SDF + 光照 + 雾（预算 25 分钟）
+## M1 · 城市 SDF + 光照 + 雾（预算 25 分钟） ✅ 实际 4 分钟（19:04–19:08）
 方案：
 - 坐标系：相机沿 +z 走街道，街道在 x 方向周期 CELL=6，z 方向周期 CELL=6；街道宽 2.2（半宽 1.1），楼体占格子内剩余。
 - map(p)：id=floor(p.xz/CELL)，局部 q=p.xz-(id+0.5)*CELL；hash22(id) 给楼的半宽 (0.9–1.6) 和高度；高度 = 2 + 26*pow(h,4)（幂律，少数高楼）。
@@ -51,3 +51,6 @@ subagent 审阅（配色/光影/动态各 ≤3 条），修影响最大 3 条。
 commit `M5: polish after review`。→ CP5
 
 ## 决策记录
+- 2026-09-08 19:08 M1：第一版曝光像白天（albedo 0.24、key 0.85、雾 0.032 都按白天量级给的）。改为夜景量级：albedo 0.13、key 0.6×、雾 0.011、天空地平线 0.11。规则：夜景场景所有线性量从 0.1 量级起步。
+- three.js 锁 0.170.0（jsdelivr）。RawShaderMaterial + GLSL3，自己声明 precision/out。
+- 街区：CELL=8，街道半宽 2.0，楼半宽 1–2，楼在格内随机平移但不进街道；domain repetition 用「到格边界距离 + 2.0」做步长上界保证不穿邻格。
