@@ -53,6 +53,8 @@ uniform vec2  iResolution;   // render target size in pixels
 uniform vec4  uAudio;        // bass, mid, high, energy  (0..1)
 uniform float uBeat;         // 1 on beat, exp decay
 uniform float uScale;        // renderScale (for debug)
+uniform float uCamZ;         // camera travel along the street (integrated in JS)
+uniform vec4  uParams;       // response, fog multiplier, speed multiplier, reserved
 
 // ---------- hashes ----------
 float hash11(float n){ return fract(sin(n)*43758.5453123); }
@@ -73,6 +75,8 @@ void cellParams(vec2 id, out vec2 hs, out float ht){
   hs = vec2(1.0) + 1.0*r;                       // half size 1.0..2.0  (cell half 4.0 - street 2.0 = 2.0 max)
   float h = hash21(id);
   ht = 2.0 + 28.0*pow(h, 4.0);                  // power law: many low, few tall
+  float resp = 0.2 + 0.8*hash21(id + 23.7);     // per-building audio response 0.2..1.0
+  ht *= 1.0 + 0.6*uAudio.x*resp*uParams.x;      // bass grows the skyline, unevenly
   if (hash21(id + 17.3) < 0.10) ht = 0.35;      // a few empty lots
 }
 
@@ -132,29 +136,89 @@ vec3 skyColor(vec3 rd){
   return mix(hor, top, pow(y, 0.4));
 }
 
+vec3 windowLight(vec3 p, vec3 n, float t){
+  if (n.y > 0.5 || p.y < 0.9) return vec3(0.0);            // no windows on roofs / ground floor
+  vec2 id = floor(p.xz / CELL);
+  float u = abs(n.x) > 0.5 ? p.z : p.x;
+  vec2 g = vec2(u / 0.45, p.y / 0.6);
+  vec2 c = floor(g), f = fract(g);
+  float density = 0.15 + 0.35*uAudio.z*uParams.x;          // highs switch more windows on
+  float lit = step(hash21(c + id*13.17 + (abs(n.x) > 0.5 ? 0.37 : 0.0)), density);
+  vec2 inner = smoothstep(0.22, 0.30, f) * smoothstep(0.22, 0.30, 1.0 - f);
+  float bright = 0.5 + 0.9*hash21(c*1.71 + id + 3.3);
+  float lod = smoothstep(25.0, 90.0, t);                    // far away: average, no sparkle
+  float e = mix(lit*inner.x*inner.y*bright, density*0.22, lod);
+  vec3 tint = mix(vec3(1.0, 0.72, 0.44), vec3(0.95, 0.85, 0.7), hash21(c*0.37 + id*2.1));
+  return tint * 0.9 * e;
+}
+
+vec3 shade(vec3 p, vec3 n, vec3 rd, float t, int mat, bool cheap){
+  vec3 alb = (mat == 2) ? vec3(0.04, 0.04, 0.045) : vec3(0.13, 0.145, 0.17);
+  vec3 L = normalize(vec3(0.45, 0.65, -0.35));
+  float hl = 0.5 + 0.5*dot(n, L);
+  float dif = mix(hl*hl, max(dot(n, L), 0.0), 0.7);
+  vec3 keyCol = vec3(0.50, 0.62, 0.85)*0.6;
+  vec3 skyAmb = vec3(0.06, 0.075, 0.11) * (0.55 + 0.45*n.y);
+  float ao = cheap ? 0.8 : calcAO(p, n);
+  vec3 col = alb * (keyCol*dif + skyAmb*0.9) * mix(0.4, 1.0, ao);
+  if (mat == 1) col += windowLight(p, n, t);
+  float roY = p.y - rd.y*t;
+  float midY = max(0.5*(roY + p.y), 0.0);
+  float dens = 0.011 * (0.7 + 0.6*uAudio.y*uParams.x) * uParams.y * exp(-0.035*midY);   // mids thicken the fog
+  float fog = 1.0 - exp(-dens*t);
+  vec3 fogCol = mix(skyColor(rd), vec3(0.13, 0.10, 0.08), 0.3);
+  return mix(col, fogCol, fog);
+}
+
+// 8-step single-scatter along the view ray: light from the key direction, blocked near geometry
+vec3 volumetric(vec3 ro, vec3 rd, float tmax, vec2 frag){
+  vec3 L = normalize(vec3(0.45, 0.65, -0.35));
+  float ph = 0.5 + 0.5*dot(rd, L); ph *= ph;
+  float tEnd = min(tmax, 45.0);
+  float dt = tEnd / 8.0;
+  float t = dt * hash21(frag);
+  float acc = 0.0;
+  for (int i = 0; i < 8; i++){
+    vec3 p = ro + rd*t;
+    float vis = clamp(map(p) / 2.5, 0.0, 1.0);
+    acc += vis * exp(-0.05*max(p.y, 0.0)) * dt;
+    t += dt;
+  }
+  float mids = 0.7 + 0.6*uAudio.y*uParams.x;
+  return vec3(0.45, 0.55, 0.75) * acc * 0.0045 * ph * mids * uParams.y;
+}
+
 vec3 render(vec3 ro, vec3 rd, vec2 uv){
   vec2 h = raymarch(ro, rd);
   vec3 col = skyColor(rd);
   if (h.x > 0.0){
     float t = h.x;
     vec3 p = ro + rd*t;
+    int mat = gMat;                       // read before calcNormal() overwrites it
     vec3 n = calcNormal(p);
-    int mat = gMat;
-    vec3 alb = (mat == 2) ? vec3(0.06, 0.06, 0.065) : vec3(0.13, 0.145, 0.17);
-    vec3 L = normalize(vec3(0.45, 0.65, -0.35));
-    float hl = 0.5 + 0.5*dot(n, L);
-    float dif = mix(hl*hl, max(dot(n, L), 0.0), 0.7);           // mostly lambert, half-lambert keeps shadow side alive
-    vec3 keyCol = vec3(0.50, 0.62, 0.85)*0.6;
-    vec3 skyAmb = vec3(0.06, 0.075, 0.11) * (0.55 + 0.45*n.y);
-    float ao = calcAO(p, n);
-    col = alb * (keyCol*dif + skyAmb*0.9) * mix(0.4, 1.0, ao);
-    // exponential fog, slightly warmer than the sky it fades into
-    float midY = max(0.5*(ro.y + p.y), 0.0);
-    float dens = 0.011 * exp(-0.035*midY);
-    float fog = 1.0 - exp(-dens*t);
-    vec3 fogCol = mix(skyColor(rd), vec3(0.13, 0.10, 0.08), 0.3);
-    col = mix(col, fogCol, fog);
+    col = shade(p, n, rd, t, mat, false);
+    if (mat == 2){                        // wet ground: one bounce, <=32 steps, no AO / volumetrics
+      vec3 rr = reflect(rd, n);
+      vec3 rp = p + n*0.02;
+      float t2 = 0.0, hit = -1.0;
+      for (int i = 0; i < 32; i++){
+        float d = map(rp + rr*t2);
+        if (d < 0.0012*t2 + 0.001){ hit = t2; break; }
+        t2 += d*0.95;
+        if (t2 > 90.0) break;
+      }
+      vec3 refl = skyColor(rr);
+      if (hit > 0.0){
+        int m2 = gMat;
+        vec3 q = rp + rr*hit;
+        refl = shade(q, calcNormal(q), rr, hit + t, m2, true);
+      }
+      float c = max(dot(-rd, n), 0.0);
+      float fres = 0.04 + 0.96*pow(1.0 - c, 5.0);
+      col = mix(col, refl, fres*0.85);
+    }
   }
+  col += volumetric(ro, rd, h.x > 0.0 ? h.x : MAXD, gl_FragCoord.xy);
   col *= 1.25;
   return col;
 }
@@ -162,13 +226,15 @@ vec3 render(vec3 ro, vec3 rd, vec2 uv){
 void main(){
   vec2 frag = gl_FragCoord.xy;
   vec2 uv = (2.0*frag - iResolution) / iResolution.y;
-  vec3 ro = vec3(0.0, 4.5, iTime*2.0);
-  vec3 ta = ro + vec3(0.0, 0.6, 6.0);
+  float ct = iTime;
+  vec3 ro = vec3(0.6*sin(ct*0.23) + 0.25*sin(ct*0.61), 2.6 + 0.15*sin(ct*0.37), uCamZ);
+  vec3 ta = ro + vec3(0.35*sin(ct*0.17), 0.45 + 0.12*sin(ct*0.29), 6.0);
   vec3 fw = normalize(ta - ro);
   vec3 rt = normalize(cross(fw, vec3(0.0, 1.0, 0.0)));
   vec3 up = cross(rt, fw);
   vec3 rd = normalize(uv.x*rt + uv.y*up + 1.7*fw);
-  vec3 col = render(ro, rd, uv);
+  ro += (uv.x*rt + uv.y*up) * 0.10*uBeat;                 // beat: short radial lens push
+  vec3 col = render(ro, rd, uv) * (1.0 + 0.10*uBeat);
   // NaN / Inf guard -> pure magenta
   if (any(isnan(col)) || any(isinf(col))) col = vec3(1.0, 0.0, 1.0);
   else col = pow(clamp(col, 0.0, 1.0), vec3(1.0/2.2));
@@ -224,8 +290,13 @@ const uniforms = {
   iResolution: { value: new THREE.Vector2(1, 1) },
   uAudio:      { value: new THREE.Vector4(0, 0, 0, 0) },
   uBeat:       { value: 0 },
-  uScale:      { value: renderScale }
+  uScale:      { value: renderScale },
+  uCamZ:       { value: 0 },
+  uParams:     { value: new THREE.Vector4(1, 1, 1, 0) }
 };
+const ctl = { response: 1, fog: 1, speed: 1 };
+window.__ctl = ctl;
+let camZ = 0;
 const vert = document.getElementById('vert').textContent;
 const mainMat = new THREE.RawShaderMaterial({
   glslVersion: THREE.GLSL3, uniforms,
@@ -420,6 +491,10 @@ function frame(now){
   uniforms.uAudio.value.set(a.bass, a.mid, a.high, a.energy);
   uniforms.uBeat.value = a.beat;
   drawBars(a);
+  const baseSpeed = 3.0;
+  camZ = TEST ? 16.0 : camZ + (dt/1000) * baseSpeed * ctl.speed * (0.6 + 0.8*a.energy);
+  uniforms.uCamZ.value = camZ;
+  uniforms.uParams.value.set(ctl.response, ctl.fog, ctl.speed, 0);
 
   renderer.setRenderTarget(rt);
   renderer.render(sceneRT, cam);

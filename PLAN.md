@@ -30,8 +30,17 @@ window.__stats 和 ?test=1。verify.mjs。
 点击开始遮罩 → AudioContext。麦克风按钮；拖 mp3/wav 播放。Analyser fftSize 2048，bass/mid/high/energy，滑动最大值归一，不对称平滑（0.4/0.08）。beat：bass > 1s 滑动平均 1.4 倍且 >200ms，uBeat=1 后 8Hz 指数衰减。右下角 5 根柱子，H 隐藏。?test=1 仍合成。
 commit `M2: audio pipeline`。→ CP2
 
-## M3 · 映射 + 相机 + 体积光（预算 25 分钟，硬止损）
-方案（≤15 行，进入前写）：
+## M3 · 映射 + 相机 + 体积光（预算 25 分钟，硬止损） ✅ 7 步全部完成，实际 12 分钟（19:17–19:29）
+方案：
+- 相机 z 在 JS 里积分（速度依赖 energy，shader 里不能积分），新 uniform uCamZ；test 模式 uCamZ = 16。高度 2.6（平均楼高 7.6 的 1/3）+ 微 bob，横向 sin 漂移 ±0.6，俯仰 sin 微量。
+- 新 uniform uParams = (响应强度, 雾倍率, 相机速度, 预留)，M4 滑杆直接用，默认 (1,1,1,0)。
+- 楼高响应：cellParams 里 ht *= 1 + 0.6*bass*resp*uParams.x，resp = 0.2+0.8*hash。楼在 SDF 里真的变高，天台跟着走。
+- 窗户在 shade() 里做：按法线选面坐标 (|n.x|>0.5 用 p.z 否则 p.x)，格 0.45×0.6，每格 hash < 密度则点亮，暖色 (1.0,0.72,0.44)，只在竖直面。密度 0.15+0.5*high。
+- 雾密度 × (0.7+0.6*mid) × uParams.y。
+- beat：ro 沿屏幕径向偏移 0.12*uBeat*uv（镜头"推"一下），曝光 × (1+0.12*uBeat)。
+- 体积光：8 步沿视线到 min(t,50)，每步一次 map()，可见度 = clamp(map/2)（楼附近散射被挡），HG 相位朝主光，冷色。
+- 反射：地面命中 → 反射 rd，march ≤32 步，shade(cheap=true)（无 AO、无体积光），fresnel 0.04+0.96*(1-cos)^5 × 0.8 湿度混入。
+- shade(p,n,rd,t,mat,cheap) 抽出来给主射线和反射共用。
 
 1. 相机沿街推进 速度 = 基础 × (0.6+0.8×energy)，横向漂移+俯仰，高度楼高 1/3
 2. 楼高 × (1+0.6×bass)，每楼 hash 响应系数 0.2–1.0
@@ -56,3 +65,4 @@ commit `M5: polish after review`。→ CP5
 - 街区：CELL=8，街道半宽 2.0，楼半宽 1–2，楼在格内随机平移但不进街道；domain repetition 用「到格边界距离 + 2.0」做步长上界保证不穿邻格。
 - 2026-09-08 19:15 M2：频带用 1/bin 加权平均近似对数频带；自适应增益用半衰期 2.5s 的滑动最大值；未接入音频时用 0.25 倍合成信号做"呼吸"。真实路径用 playwright + 合成 wav（60Hz kick 每 0.5s）验过：beat 触发、四值在动。
 - 本地服务用 python3 -m http.server 5173（零安装，等价 npx serve）。
+- 2026-09-08 19:29 M3：gMat 全局材质要在 calcNormal() 之前读（calcNormal 调 4 次 map 会覆盖它）。窗户第一版 2.4 倍亮度像乐高，改 0.9 倍 + 窗口缩小到格子的 40% + 远处按距离退化成平均亮度防闪烁。
