@@ -495,8 +495,28 @@ else {
     const k = e.key.toLowerCase();
     if (k === 'h'){ barsVisible = !barsVisible; bars.classList.toggle('hidden', !barsVisible); srcBox.classList.toggle('hidden', !barsVisible); }
     if (k === 'f'){ document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen(); }
+    if (k === 'r'){ toggleRecord(); }
     if (k === 's'){ renderer.domElement.toBlob(b => { const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'nightcity-' + Date.now() + '.png'; a.click(); }); }
   });
+  // R: record the canvas for 30 s -> webm (VP9, 8 Mbps)
+  let rec = null, recTimer = 0;
+  function toggleRecord(){
+    if (rec){ clearTimeout(recTimer); rec.stop(); return; }
+    const stream = renderer.domElement.captureStream(60);
+    if (audio.kind === 'file' && audio.ctx){ const dst = audio.ctx.createMediaStreamDestination(); audio.analyser.connect(dst); stream.addTrack(dst.stream.getAudioTracks()[0]); }
+    const mime = ['video/webm;codecs=vp9', 'video/webm'].find(m => MediaRecorder.isTypeSupported(m));
+    const chunks = [];
+    rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 8_000_000 });
+    rec.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+    rec.onstop = () => {
+      const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(chunks, { type: 'video/webm' }));
+      a.download = 'nightcity-' + Date.now() + '.webm'; a.click();
+      rec = null; srcName.textContent = srcName.textContent.replace(' ● REC', '');
+    };
+    rec.start(1000);
+    srcName.textContent += ' ● REC';
+    recTimer = setTimeout(() => rec && rec.stop(), 30000);
+  }
   // hide cursor after 3 s idle while fullscreen
   let cursorTimer = 0;
   const wake = () => { document.body.classList.remove('nocursor'); clearTimeout(cursorTimer);
