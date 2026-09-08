@@ -55,7 +55,7 @@ commit `M3: audio mapping + camera + volumetric light`。→ CP3
 自适应 renderScale（<55 两秒 -0.1 下限 0.4；>59 五秒 +0.05 上限 1.0）。面板 ≤60 行：输入源、响应强度/相机速度/雾 三滑杆、beat 阈值、renderScale 显示。F 全屏 S 存 PNG H 隐藏，全屏 3 秒隐藏光标。
 commit `M4: perf + panel`。→ CP4
 
-## M5 · 对抗式审美审阅 + 录屏（预算 15 分钟）
+## M5 · 对抗式审美审阅 + 录屏（预算 15 分钟） ✅ 实际 4 分钟（19:48–19:52）
 subagent 审阅（配色/光影/动态各 ≤3 条），修影响最大 3 条。R 键 MediaRecorder 30 秒 webm 8Mbps。
 commit `M5: polish after review`。→ CP5
 
@@ -67,3 +67,5 @@ commit `M5: polish after review`。→ CP5
 - 本地服务用 python3 -m http.server 5173（零安装，等价 npx serve）。
 - 2026-09-08 19:29 M3：gMat 全局材质要在 calcNormal() 之前读（calcNormal 调 4 次 map 会覆盖它）。窗户第一版 2.4 倍亮度像乐高，改 0.9 倍 + 窗口缩小到格子的 40% + 远处按距离退化成平均亮度防闪烁。
 - 2026-09-08 19:36 M4：自适应 renderScale 在 test 模式关闭（保证截图可复现）。面板 HTML 14 行 + JS 约 25 行。S 存帧依赖 preserveDrawingBuffer=true（M0 就开了）。
+- 2026-09-08 19:52 M5 审阅 9 条，采纳 3 条：①体积光冷蓝 vs 雾暖棕互相抵消 → 体积光改同族暖中性色；②整图中灰无黑、屋顶比立面亮 → 去掉 ×1.25 曝光、albedo 0.09/0.03、月光 ×0.3、加街面暖色上射光；③beat 原点平移 + 10% 闪像 glitch → 改成 FOV 呼吸 + 3% 原点位移 + 3.5% 曝光。
+- 不采纳并说明：地平线改冷色（任务书要求地平线偏暖、雾比天空略暖）；bass 楼高 0.6→0.1（任务书指定 0.6）；窗户 smoothstep 渐亮、湿地面 fresnel 0.12、窗户光晕 —— 有价值但超出"只修 3 条"，留作后续。
