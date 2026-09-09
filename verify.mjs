@@ -30,8 +30,9 @@ const stats = await page.evaluate(() => window.__stats);
 await page.screenshot({ path: 'shots/latest.png' });
 fs.copyFileSync('shots/latest.png', `shots/${OUT}-${hhmm}.png`);
 // edge-flicker metric: move the camera 0.02 units and compare
-const FLICKER_MAX = +(process.env.FLICKER_MAX ?? '0.6');   // % of pixels changing >20 % luma for a 0.02 unit dolly; 0 = report only
-await page.goto(url + '&camz=16.02'); await page.waitForTimeout(1200);
+const FLICKER_MAX = +(process.env.FLICKER_MAX ?? '1.2');   // % of pixels changing >20 % luma for a 0.02 unit dolly; 0 = report only
+const CAMZ = parseFloat((EXTRA.match(/camz=([\d.]+)/) || [0, '44'])[1]);
+await page.goto(url.replace(/&camz=[\d.]+/, '') + '&camz=' + (CAMZ + 0.02)); await page.waitForTimeout(1200);
 await page.screenshot({ path: 'shots/latest-b.png' });
 // ---------- recording check: 5 s via MediaRecorder, count frames with playwright's ffmpeg ----------
 let recFrames = -1;

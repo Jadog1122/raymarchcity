@@ -12,7 +12,7 @@
 
 ## 验证（每次改 shader 必跑）
 - `npm run verify` = `node verify.mjs`：有头 chromium，deviceScaleFactor 2，窗口 1720x720，打开 `index.html?test=1`。
-- `?test=1`：iTime 固定 8.0，音频 uniforms 用 sin(t) 合成，随机种子固定，不请求麦克风。
+- `?test=1`：iTime 固定 8.0，camz 默认 44（峡谷段），音频 uniforms 用 sin(t) 合成，整数哈希保证跨加载一致，不请求麦克风。可加 &beat= &search= &flash= &camz= &noaa=1 &rec=N。
 - 等 3 秒读 `window.__stats`（fps/frameMs/shaderError/renderScale/rt 尺寸/DPR/GPU），截图 `shots/latest.png` + `shots/M<n>-<hhmm>.png`。
 - 通过：shaderError 空；fps ≥ 50；非黑像素 > 40%；品红 < 0.1%；最暗 5% 像素亮度均值 < 0.03（必须有真正的黑）；最亮 1% 像素亮度均值 > 0.9（必须有高光）；录屏 5 秒帧数 ≥ 140。任一不过 exit 1。
 - verify 保证不坏，不保证好看：每步 verify 后必须用眼睛看截图，并对照艺术方向的两句话（两种颜色、中间全是黑）。

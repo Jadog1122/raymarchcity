@@ -212,7 +212,7 @@ float calcAO(vec3 p, vec3 n){
 vec3 skyBase(vec3 rd){
   float y = clamp(rd.y, 0.0, 1.0);
   vec3 top = vec3(0.0006, 0.0012, 0.0035);
-  vec3 hor = vec3(0.024, 0.042, 0.068);
+  vec3 hor = vec3(0.014, 0.032, 0.064);
   return mix(hor, top, pow(y, 0.5));
 }
 
@@ -347,7 +347,7 @@ vec3 windowLight(vec3 p, vec3 n, float t, out float leak, out float facade){
     float cl = hash21(floor(cc / 3.0) + id*7.7 + face);          // 3x3 cluster value
     float hw = hash21(cc + id*13.17 + face);
     float v  = mix(hw, cl, 0.55);                                   // clustered, not uniform
-    float b  = v < 0.30 ? 0.0 : (v < 0.70 ? 0.10 : (v < 0.90 ? 1.8 : 4.0));   // off / dim / bright / near-white
+    float b  = v < 0.30 ? 0.0 : (v < 0.70 ? 0.10 : (v < 0.90 ? 1.6 : 4.5));   // off / dim / bright / near-white
     float elig = step(hash21(cc*2.3 + id + 9.0), prof * occ);
     b *= elig;
     float rw = ringBoost(p, hash21(cc*0.71 + id + 1.7));                  // per-window timing: the wave front gets texture
@@ -362,7 +362,7 @@ vec3 windowLight(vec3 p, vec3 n, float t, out float leak, out float facade){
     }
     leak += b * smoothstep(1.1, 0.25, length(d * vec2(1.0, ws.y / ws.x)));
   }
-  float lod = smoothstep(25.0, 90.0, t);                            // far: average, no sparkle
+  float lod = smoothstep(15.0, 60.0, t);                            // far: average, no sparkle
   // facade relief: floor slabs, mullions between window columns, a lighter parapet at the top
   float slab = smoothstep(0.0, 0.09, f.y) * smoothstep(1.0, 0.91, f.y);
   float mull = smoothstep(0.0, 0.06, f.x) * smoothstep(1.0, 0.94, f.x);
@@ -402,9 +402,9 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float t, int mat, bool cheap){
   col += wEmit;
   float roY = p.y - rd.y*t;
   float midY = max(0.5*(roY + p.y), 0.0);
-  float dens = 0.009 * uParams.y * exp(-0.035*midY);
+  float dens = 0.009 * uParams.y * exp(-0.06*midY);
   float fog = 1.0 - exp(-dens*t);
-  vec3 fogCol = skyBase(rd) * vec3(0.85, 1.0, 1.15) * (1.0 + 5.0*flash());  // fog colder than the sky; lightning lifts it
+  vec3 fogCol = skyBase(rd) * vec3(0.75, 0.95, 1.2) * (1.0 + 5.0*flash());  // fog colder than the sky; lightning lifts it
   col = mix(col, vec3(dot(col, vec3(0.3, 0.5, 0.2))), 0.5*fog);              // distance desaturation
   return mix(col, fogCol, fog);
 }
@@ -550,7 +550,9 @@ vec3 tent(vec2 uv, float lod){
   vec3 s = textureLod(tBright, uv, lod).rgb * 4.0;
   s += (textureLod(tBright, uv + vec2(ts.x, 0.0), lod).rgb + textureLod(tBright, uv - vec2(ts.x, 0.0), lod).rgb
       + textureLod(tBright, uv + vec2(0.0, ts.y), lod).rgb + textureLod(tBright, uv - vec2(0.0, ts.y), lod).rgb) * 2.0;
-  return s / 12.0;
+  s += textureLod(tBright, uv + ts, lod).rgb + textureLod(tBright, uv - ts, lod).rgb
+     + textureLod(tBright, uv + vec2(ts.x, -ts.y), lod).rgb + textureLod(tBright, uv + vec2(-ts.x, ts.y), lod).rgb;
+  return s / 16.0;
 }
 
 // screen-space rain: two layers of slanted streaks
@@ -592,7 +594,7 @@ void main(){
   col.r = mix(col.r, texture(tScene, uv + off).r, fr);
   col.b = mix(col.b, texture(tScene, uv - off).b, fr);
   // bloom: 4 mip levels, 9-tap tent each
-  vec3 bloom = (tent(uv, 0.0) + tent(uv, 1.0) + tent(uv, 2.0) + tent(uv, 3.0)) * 0.25;
+  vec3 bloom = (tent(uv, 1.0) + tent(uv, 2.0) + tent(uv, 3.0) + tent(uv, 4.0)) * 0.25;
   col += bloom * uBloomStr;
   // anamorphic streak: horizontal, 6 % of the width, cold
   vec3 streak = vec3(0.0); float wsum = 0.0;
@@ -600,11 +602,18 @@ void main(){
     float f = float(i) / 4.0, w = 1.0 - abs(f);
     streak += textureLod(tBright, uv + vec2(f*0.03, 0.0), 3.0).rgb * w; wsum += w;
   }
-  col += streak / wsum * vec3(0.5, 0.68, 1.0) * 0.5;
+  col += streak / wsum * vec3(0.5, 0.68, 1.0) * 0.3;
   col += rain(gl_FragCoord.xy, uTime) * vec3(0.45, 0.60, 0.85) * 0.10 * (0.4 + 2.0*bloom.g);   // rain, brighter near lights
   // vignette in linear light (highlights survive, shadows sink), then tonemap + display transform
   col *= 1.0 - 0.55 * pow(r, 2.2);
-  col = aces(col * uExposure);
+  {
+    vec3 c = col * uExposure;
+    float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+    vec3 perChannel = aces(c);
+    vec3 hueKeep = c * (aces(vec3(l)).x / max(l, 1e-4));       // tonemap luminance, keep the tungsten hue in highlights
+    float keep = 0.65 * (1.0 - smoothstep(2.0, 4.5, l));          // very bright cores still clip to white, like film
+    col = mix(perChannel, clamp(hueKeep, 0.0, 1.0), keep);
+  }
   col = pow(col, vec3(1.0/2.2));
   col = max(col - 0.022, 0.0) / (1.0 - 0.022);                 // crush the blacks (film toe)
   // grain: per frame, stronger in the shadows
@@ -934,7 +943,7 @@ function frame(now){
   uniforms.uBeat.value = a.beat;
   drawBars(a);
   const baseSpeed = 3.0;
-  camZ = TEST ? parseFloat(params.get('camz') ?? '16') : camZ + (dt/1000) * baseSpeed * ctl.speed * (0.6 + 0.8*a.energy);
+  camZ = TEST ? parseFloat(params.get('camz') ?? '44') : camZ + (dt/1000) * baseSpeed * ctl.speed * (0.6 + 0.8*a.energy);
   uniforms.uCamZ.value = camZ;
   uniforms.uParams.value.set(ctl.response, ctl.fog, ctl.speed, 0);
   searchAngle = TEST ? parseFloat(params.get('search') ?? '-1.75') : searchAngle + (dt/1000) * (2*Math.PI/20) * (0.6 + 1.2*a.bass);
