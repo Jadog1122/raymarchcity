@@ -345,7 +345,7 @@ vec3 windowLight(vec3 p, vec3 n, float t, out float leak, out float facade){
   float fy = clamp(p.y / max(ht, 1.0), 0.0, 1.0);
   float prof = smoothstep(0.0, 0.22, fy) * (1.0 - smoothstep(0.72, 1.0, fy));   // ground + top floors mostly dark
   float gRing = ringBoost(p, 0.0);
-  float occ = 0.25 + 0.25*hash21(id + 77.7);                                       // per-building occupancy
+  float occ = (0.25 + 0.25*hash21(id + 77.7)) * (0.6 + 0.4*uMood.y);   // quiet music: the city dims                                       // per-building occupancy
   vec3 emit = vec3(0.0);
   for (int k = 0; k < 5; k++){                                          // centre + 4 neighbours (cross)
     int i = (k == 1) ? -1 : (k == 2 ? 1 : 0), j = (k == 3) ? -1 : (k == 4 ? 1 : 0);
@@ -719,7 +719,8 @@ const uniforms = {
   uMood:       { value: new THREE.Vector4(0.5, 1, 0, 1) }
 };
 const beatTimes = [-99, -99];
-let beatCount = 0, flashTime = -99, slowEnergy = 0.5;
+let beatCount = 0, flashTime = -99, slowEnergy = 0.5, dropTime = -99;
+const energyHist = [];   // [t, energy] for the last 4 s
 let fadeInAt = -99, fadeOutAt = 1e9;           // seconds (page time)
 const titleEl = document.getElementById('title');
 function cueOpening(t){ fadeInAt = t; fadeOutAt = 1e9; setTimeout(() => titleEl.style.opacity = 1, 1000); setTimeout(() => titleEl.style.opacity = 0, 5000); }
@@ -865,8 +866,15 @@ function liveAudio(dt, nowSec){
   const mean = audio.bassHist.reduce((a, b) => a + b, 0) / audio.bassHist.length;
   if (raw.bass > audio.beatThreshold*mean && raw.bass > 1e-4 && nowSec - audio.lastBeat > 0.2){ audio.beat = 1; audio.lastBeat = nowSec; beatTimes.unshift(nowSec); beatTimes.length = 2;
     beatCount++;
-    if (beatCount % 8 === 0 || (audio.val.energy > 0.85 && nowSec - flashTime > 4)) flashTime = nowSec;   // lightning is rare
+    // phrase level: a 'drop' = energy of the last second clearly above the 3 s before it, on a beat
+    let r = 0, rn = 0, pv = 0, pn = 0;
+    for (const [tt, e] of energyHist){ if (nowSec - tt < 1.0){ r += e; rn++; } else { pv += e; pn++; } }
+    const recent = rn ? r/rn : 0, prev = pn ? pv/pn : 0;
+    if (recent > prev*1.25 && recent > 0.45 && nowSec - dropTime > 6){ dropTime = nowSec; flashTime = nowSec; }
+    else if (nowSec - flashTime > 25) flashTime = nowSec;                    // quiet tracks still get one now and then
   }
+  energyHist.push([nowSec, audio.val.energy]);
+  while (energyHist.length && nowSec - energyHist[0][0] > 4.0) energyHist.shift();
   audio.beat *= Math.exp(-8*dt);
   // adaptive gain (sliding max with slow decay) + asymmetric smoothing
   for (const k of ['bass', 'mid', 'high', 'energy']){
@@ -985,7 +993,8 @@ function frame(now){
   uniforms.uBeat.value = a.beat;
   drawBars(a);
   const baseSpeed = 3.0;
-  camZ = TEST ? parseFloat(params.get('camz') ?? '44') : camZ + (dt/1000) * baseSpeed * ctl.speed * (0.6 + 0.8*a.energy);
+  const dropBoost = 1 + 0.8*Math.exp(-Math.max(0, t - dropTime) / 3);
+  camZ = TEST ? parseFloat(params.get('camz') ?? '44') : camZ + (dt/1000) * baseSpeed * ctl.speed * (0.6 + 0.8*a.energy) * dropBoost;
   uniforms.uCamZ.value = camZ;
   uniforms.uParams.value.set(ctl.response, ctl.fog, ctl.speed, 0);
   searchAngle = TEST ? parseFloat(params.get('search') ?? '-1.75') : searchAngle + (dt/1000) * (2*Math.PI/20) * (0.6 + 1.2*a.bass);
