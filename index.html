@@ -83,6 +83,7 @@ vec2  hash22(vec2 p){ float h = hash21(p); return vec2(h, hash21(p + h + 7.1)); 
 #define STREET 2.0     // half street width
 #define MAXD   220.0
 int gMat = 0;          // 1 building, 2 ground
+float gDepth = 0.0;    // hit distance of the primary ray (MAXD if sky)
 
 float sdBox(vec3 p, vec3 b){ vec3 d = abs(p) - b; return length(max(d, 0.0)) + min(max(d.x, max(d.y, d.z)), 0.0); }
 
@@ -208,6 +209,7 @@ vec3 volumetric(vec3 ro, vec3 rd, float tmax, vec2 frag){
 
 vec3 render(vec3 ro, vec3 rd, vec2 uv){
   vec2 h = raymarch(ro, rd);
+  gDepth = h.x > 0.0 ? h.x : MAXD;
   vec3 col = skyColor(rd);
   if (h.x > 0.0){
     float t = h.x;
@@ -252,19 +254,82 @@ void main(){
   vec3 rd = normalize(uv.x*rt + uv.y*up + (1.7 + 0.08*uBeat)*fw);   // beat: brief FOV breath (lens push)
   ro += (uv.x*rt + uv.y*up) * 0.03*uBeat;                            // plus a tiny radial origin shift
   vec3 col = render(ro, rd, uv) * (1.0 + 0.035*uBeat);
-  // NaN / Inf guard -> pure magenta
+  // NaN / Inf guard -> pure magenta. Output is linear HDR; alpha carries depth for the post pass.
   if (any(isnan(col)) || any(isinf(col))) col = vec3(1.0, 0.0, 1.0);
-  else col = pow(clamp(col, 0.0, 1.0), vec3(1.0/2.2));
-  fragColor = vec4(col, 1.0);
+  fragColor = vec4(max(col, 0.0), gDepth / MAXD);
 }
 </script>
 
-<script id="blit" type="x-shader/x-fragment">
+<script id="post" type="x-shader/x-fragment">
 precision highp float;
 out vec4 fragColor;
-uniform sampler2D tex;
-uniform vec2 uScreen;
-void main(){ fragColor = texture(tex, gl_FragCoord.xy / uScreen); }
+uniform sampler2D tScene, tBright;
+uniform vec2  uRes, uBrightRes;
+uniform int   uMode;                 // 0 bright extraction, 1 composite
+uniform float uTime, uFrame, uBloomThr, uBloomStr, uRain, uExposure;
+
+float hash21(vec2 p){ p = fract(p*vec2(123.34, 456.21)); p += dot(p, p+45.32); return fract(p.x*p.y); }
+vec3 aces(vec3 x){ return clamp((x*(2.51*x + 0.03)) / (x*(2.43*x + 0.59) + 0.14), 0.0, 1.0); }
+
+// scene fetch with 2 px far-depth blur (cheap DOF)
+vec3 fetchScene(vec2 uv){
+  vec4 c = texture(tScene, uv);
+  float r = 2.0 * smoothstep(0.25, 0.75, c.a);
+  if (r < 0.2) return c.rgb;
+  vec2 o = r / uRes;
+  vec3 s = c.rgb * 2.0;
+  s += texture(tScene, uv + o).rgb + texture(tScene, uv - o).rgb
+     + texture(tScene, uv + vec2(o.x, -o.y)).rgb + texture(tScene, uv + vec2(-o.x, o.y)).rgb;
+  return s / 6.0;
+}
+vec3 tent(vec2 uv, float lod){
+  vec2 ts = exp2(lod) / uBrightRes;
+  vec3 s = textureLod(tBright, uv, lod).rgb * 4.0;
+  s += (textureLod(tBright, uv + vec2(ts.x, 0.0), lod).rgb + textureLod(tBright, uv - vec2(ts.x, 0.0), lod).rgb
+      + textureLod(tBright, uv + vec2(0.0, ts.y), lod).rgb + textureLod(tBright, uv - vec2(0.0, ts.y), lod).rgb) * 2.0;
+  s += textureLod(tBright, uv + ts, lod).rgb + textureLod(tBright, uv - ts, lod).rgb
+     + textureLod(tBright, uv + vec2(ts.x, -ts.y), lod).rgb + textureLod(tBright, uv + vec2(-ts.x, ts.y), lod).rgb;
+  return s / 16.0;
+}
+
+void main(){
+  vec2 uv = gl_FragCoord.xy / uRes;
+  if (uMode == 0){
+    vec3 c = texture(tScene, uv).rgb;
+    float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+    float k = max(l - uBloomThr, 0.0) / max(l, 1e-4);
+    fragColor = vec4(c * k, 1.0);
+    return;
+  }
+  vec2 cv = uv - 0.5;
+  float r = length(cv) / 0.7071;
+  vec2 off = cv * r * (1.5 / uRes);                          // chromatic aberration, 1.5 px at the corners
+  vec3 col = vec3(fetchScene(uv + off).r, fetchScene(uv).g, fetchScene(uv - off).b);
+  // bloom: 4 mip levels, 9-tap tent each
+  vec3 bloom = (tent(uv, 0.0) + tent(uv, 1.0) + tent(uv, 2.0) + tent(uv, 3.0)) * 0.25;
+  col += bloom * uBloomStr;
+  // anamorphic streak: horizontal, 6 % of the width, cold
+  vec3 streak = vec3(0.0); float wsum = 0.0;
+  for (int i = -8; i <= 8; i++){
+    float f = float(i) / 8.0, w = 1.0 - abs(f);
+    streak += textureLod(tBright, uv + vec2(f*0.03, 0.0), 2.5).rgb * w; wsum += w;
+  }
+  col += streak / wsum * vec3(0.5, 0.68, 1.0) * 0.5;
+  // tonemap + display transform
+  col = aces(col * uExposure);
+  col = pow(col, vec3(1.0/2.2));
+  // grain: per frame, stronger in the shadows
+  float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
+  float g = hash21(gl_FragCoord.xy + vec2(uFrame*7.31, uFrame*3.17)) - 0.5;
+  col += g * 0.04 * mix(1.6, 0.4, lum);
+  // vignette
+  col *= 1.0 - 0.38 * pow(r, 2.5);
+  // 2.39:1 letterbox
+  float barH = max(0.0, (uRes.y - uRes.x / 2.39) * 0.5);
+  if (gl_FragCoord.y < barH || gl_FragCoord.y > uRes.y - barH) col = vec3(0.0);
+  if (any(isnan(col)) || any(isinf(col))) col = vec3(1.0, 0.0, 1.0);
+  fragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
+}
 </script>
 
 <script type="module">
@@ -297,9 +362,13 @@ document.body.appendChild(renderer.domElement);
 }
 
 let renderScale = 0.75;
-const rt = new THREE.WebGLRenderTarget(2, 2, {
+const rt = new THREE.WebGLRenderTarget(2, 2, {                    // linear HDR scene, alpha = depth
   minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
-  depthBuffer: false, stencilBuffer: false, type: THREE.UnsignedByteType
+  depthBuffer: false, stencilBuffer: false, type: THREE.HalfFloatType
+});
+const rtBright = new THREE.WebGLRenderTarget(2, 2, {              // half-res bright pass, mip chain = 4-level downsample
+  minFilter: THREE.LinearMipmapLinearFilter, magFilter: THREE.LinearFilter,
+  depthBuffer: false, stencilBuffer: false, type: THREE.HalfFloatType, generateMipmaps: true
 });
 
 const uniforms = {
@@ -320,24 +389,31 @@ const mainMat = new THREE.RawShaderMaterial({
   vertexShader: vert, fragmentShader: document.getElementById('frag').textContent,
   depthTest: false, depthWrite: false
 });
-const blitUniforms = { tex: { value: rt.texture }, uScreen: { value: new THREE.Vector2(1, 1) } };
-const blitMat = new THREE.RawShaderMaterial({
-  glslVersion: THREE.GLSL3, uniforms: blitUniforms,
-  vertexShader: vert, fragmentShader: document.getElementById('blit').textContent,
+const postU = {
+  tScene: { value: rt.texture }, tBright: { value: rtBright.texture },
+  uRes: { value: new THREE.Vector2(1, 1) }, uBrightRes: { value: new THREE.Vector2(1, 1) },
+  uMode: { value: 0 }, uTime: { value: 0 }, uFrame: { value: 0 },
+  uBloomThr: { value: 0.8 }, uBloomStr: { value: 0.35 }, uRain: { value: 0.5 }, uExposure: { value: 1.0 }
+};
+const postMat = new THREE.RawShaderMaterial({
+  glslVersion: THREE.GLSL3, uniforms: postU,
+  vertexShader: vert, fragmentShader: document.getElementById('post').textContent,
   depthTest: false, depthWrite: false
 });
 const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 const quad = new THREE.PlaneGeometry(2, 2);
 const sceneRT = new THREE.Scene(); sceneRT.add(new THREE.Mesh(quad, mainMat));
-const sceneScreen = new THREE.Scene(); sceneScreen.add(new THREE.Mesh(quad, blitMat));
+const scenePost = new THREE.Scene(); scenePost.add(new THREE.Mesh(quad, postMat));
 
 function resize(){
   const w = window.innerWidth, h = window.innerHeight;   // CSS pixels
   renderer.setSize(w, h, false);
   const rw = Math.max(2, Math.round(w * renderScale)), rh = Math.max(2, Math.round(h * renderScale));
   rt.setSize(rw, rh);
+  const bw = Math.max(2, rw >> 1), bh = Math.max(2, rh >> 1);
+  rtBright.setSize(bw, bh);
   uniforms.iResolution.value.set(rw, rh);
-  blitUniforms.uScreen.value.set(w, h);
+  postU.uBrightRes.value.set(bw, bh);
   stats.rtW = rw; stats.rtH = rh; stats.renderScale = renderScale; uniforms.uScale.value = renderScale;
 }
 window.addEventListener('resize', resize);
@@ -560,8 +636,13 @@ function frame(now){
 
   renderer.setRenderTarget(rt);
   renderer.render(sceneRT, cam);
+  postU.uTime.value = t; postU.uFrame.value = TEST ? 0 : stats.frames;
+  postU.uMode.value = 0; postU.uRes.value.set(rtBright.width, rtBright.height);
+  renderer.setRenderTarget(rtBright);
+  renderer.render(scenePost, cam);                 // bright extraction (+ auto mipmaps)
+  postU.uMode.value = 1; postU.uRes.value.set(window.innerWidth, window.innerHeight);
   renderer.setRenderTarget(null);
-  renderer.render(sceneScreen, cam);
+  renderer.render(scenePost, cam);                 // composite to screen
 
   fpsCount++; msAcc += dt; stats.frames++;
   if (now - fpsT >= 1000) {
