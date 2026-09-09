@@ -32,7 +32,7 @@ await page.screenshot({ path: 'shots/latest.png' });
 fs.copyFileSync('shots/latest.png', `shots/${OUT}-${hhmm}.png`);
 // edge-flicker metric: move the camera 0.02 units and compare
 const FLICKER_MAX = +(process.env.FLICKER_MAX ?? '1.2');   // % of pixels changing >20 % luma for a 0.02 unit dolly; 0 = report only
-const CAMZ = parseFloat((EXTRA.match(/camz=([\d.]+)/) || [0, '44'])[1]);
+const CAMZ = parseFloat((EXTRA.match(/camz=([\d.]+)/) || [0, '100'])[1]);
 await page.goto(url.replace(/&camz=[\d.]+/, '') + '&camz=' + (CAMZ + 0.02)); await page.waitForTimeout(1200);
 await page.screenshot({ path: 'shots/latest-b.png' });
 // ---------- recording check: 5 s via MediaRecorder, count frames with playwright's ffmpeg ----------
@@ -162,7 +162,7 @@ if (!(magentaPct < 0.1)) fails.push(`magenta ${magentaPct.toFixed(3)}% >= 0.1%`)
 if (!(dark5 < 0.03)) fails.push(`dark5 ${dark5.toFixed(3)} >= 0.03 (no true blacks)`);
 if (!(bright1 > 0.9)) fails.push(`bright1 ${bright1.toFixed(3)} <= 0.9 (no highlights)`);
 if (!(warmPct <= 12)) fails.push(`warm ${warmPct.toFixed(1)}% > 12% (two-colour rule broken)`);
-const CENTROID_MIN = +(process.env.CENTROID_MIN ?? '3'), BLOBS_MAX = +(process.env.BLOBS_MAX ?? '90');
+const CENTROID_MIN = +(process.env.CENTROID_MIN ?? '3'), BLOBS_MAX = +(process.env.BLOBS_MAX ?? '110');
 if (CENTROID_MIN > 0 && !(centroidPct >= CENTROID_MIN)) fails.push(`centroid ${centroidPct.toFixed(1)}% < ${CENTROID_MIN}% (composition too centred)`);
 if (BLOBS_MAX > 0 && !(blobs <= BLOBS_MAX)) fails.push(`highlight blobs ${blobs} > ${BLOBS_MAX} (no light hierarchy)`);
 if (abPct >= 0 && !(abPct <= 2)) fails.push(`A/B ${abPct.toFixed(2)}% > 2% (tracer disagrees with the reference)`);

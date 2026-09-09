@@ -401,6 +401,33 @@ vec3 carLights(vec3 p){
   return acc;
 }
 
+bool neonDistrict(vec2 id){ return mod(floor(id.y / 6.0), 2.0) == 1.0; }              // every other 48-unit band is a neon district
+vec3 neonPalette(vec2 id){
+  float c = hash21(id + 71.0);
+  return c < 0.35 ? vec3(1.0, 0.15, 0.55) : (c < 0.65 ? vec3(0.15, 0.85, 1.0) : (c < 0.85 ? vec3(1.0, 0.58, 0.12) : vec3(0.55, 0.25, 1.0)));   // magenta / cyan / amber / violet
+}
+// holographic billboard: a big panel of scrolling procedural glyphs on tall buildings in neon districts; hi-hat shimmer, beat glitch
+vec3 holoBoard(vec2 id, float u, float y, float hw, float ht, out float mask){
+  mask = 0.0;
+  if (!neonDistrict(id) || hash21(id + 91.0) > 0.3 || ht < 9.0) return vec3(0.0);
+  float bw = min(hw * 0.8, 3.0), bh = min(ht * 0.28, 4.0);
+  float y0 = ht * (0.35 + 0.3*hash21(id + 92.0));
+  vec2 q = vec2(u, y - y0);
+  if (abs(q.x) > bw || abs(q.y) > bh) return vec3(0.0);
+  float glitch = step(0.7, uBeat) * step(0.5, hash21(vec2(floor(y*4.0), floor(iTime*20.0))));
+  q.x += glitch * 0.6 * (hash21(vec2(floor(y*4.0) + 3.0, floor(iTime*20.0))) - 0.5);
+  vec2 g = vec2(q.x, q.y + iTime*0.6*(hash21(id + 93.0) > 0.5 ? 1.0 : -1.0)) / 0.32;   // glyph grid scrolls
+  vec2 gc = floor(g), gf = fract(g);
+  float h1 = hash21(gc + id*2.3), h2 = hash21(gc + id*2.3 + 7.0), h3 = hash21(gc + id*2.3 + 13.0);
+  float stroke = step(abs(gf.x - 0.5), 0.08 + 0.3*h1) * step(abs(gf.y - 0.5), 0.35) * step(0.25, h2)    // vertical bars
+               + step(abs(gf.y - (0.3 + 0.4*h3)), 0.07) * step(abs(gf.x - 0.5), 0.38) * step(0.5, h1);    // horizontal bars
+  stroke = clamp(stroke, 0.0, 1.0);
+  float edge = smoothstep(0.0, 0.15, bw - abs(q.x)) * smoothstep(0.0, 0.15, bh - abs(q.y));
+  mask = edge;
+  vec3 col = mix(neonPalette(id), vec3(1.0), 0.25);
+  float shimmer = 0.8 + 0.2*sin(y*40.0 + iTime*30.0) * uAudio.z;
+  return col * (0.12 + 1.6*stroke) * edge * shimmer;
+}
 // neon as a light source: for the 3x3 cells around p, if a building has a strip, treat it as a coloured point light
 vec3 neonLight(vec3 p, vec3 n){
   vec3 acc = vec3(0.0);
@@ -408,8 +435,7 @@ vec3 neonLight(vec3 p, vec3 n){
   for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++){
     vec2 id = idc + vec2(float(i), float(j));
     if (riverRow(id.y)) continue;
-    float district = hash21(floor(id / 6.0) + 13.0);
-    float dens = district < 0.18 ? 0.35 : 0.03;
+    float dens = neonDistrict(id) ? 0.45 : 0.03;
     for (int f = 0; f < 2; f++){                               // the two face families (x-facing / z-facing)
       float face = f == 0 ? 0.37 : 0.0;
       if (hash21(id + face + 21.0) >= dens) continue;
@@ -420,7 +446,7 @@ vec3 neonLight(vec3 p, vec3 n){
       vec3 lp = f == 0 ? vec3(ctr.x + (p.x > ctr.x ? hs.x : -hs.x) + 0.05*sign(p.x - ctr.x), y0 + len*0.5, ctr.y + u0)
                        : vec3(ctr.x + u0, y0 + len*0.5, ctr.y + (p.z > ctr.y ? hs.y : -hs.y) + 0.05*sign(p.z - ctr.y));
       vec3 v = lp - p; float d2 = dot(v, v); vec3 l = v * inversesqrt(d2 + 1e-4);
-      vec3 neonCol = hash21(id + 71.0) < 0.55 ? vec3(1.0, 0.15, 0.55) : vec3(0.15, 0.85, 1.0);
+      vec3 neonCol = neonPalette(id);
       float nl = n.y > 1.5 ? 1.0 : max(dot(n, l), 0.0);
       acc += neonCol * nl * 1.2 / (1.0 + 0.25*d2);
     }
@@ -435,8 +461,7 @@ vec3 neonGlow(vec3 ro, vec3 rd, float tmax){
   for (int j = -1; j <= 2; j++) for (int i = -1; i <= 1; i++){
     vec2 id = idc + vec2(float(i), float(j));
     if (riverRow(id.y)) continue;
-    float district = hash21(floor(id / 6.0) + 13.0);
-    float dens = district < 0.18 ? 0.35 : 0.03;
+    float dens = neonDistrict(id) ? 0.45 : 0.03;
     for (int f = 0; f < 2; f++){
       float face = f == 0 ? 0.37 : 0.0;
       if (hash21(id + face + 21.0) >= dens) continue;
@@ -447,7 +472,7 @@ vec3 neonGlow(vec3 ro, vec3 rd, float tmax){
       vec3 lp = f == 0 ? vec3(ctr.x + (ro.x > ctr.x ? hs.x : -hs.x), y0 + len*0.5, ctr.y + u0) : vec3(ctr.x + u0, y0 + len*0.5, ctr.y + (ro.z > ctr.y ? hs.y : -hs.y));
       vec3 a = ro - lp; float b = dot(rd, a); float c = dot(a, a);
       float hh = sqrt(max(c - b*b, 0.09));
-      vec3 neonCol = hash21(id + 71.0) < 0.55 ? vec3(1.0, 0.15, 0.55) : vec3(0.15, 0.85, 1.0);
+      vec3 neonCol = neonPalette(id);
       acc += neonCol * (atan((tmax + b) / hh) - atan(b / hh)) / hh;
     }
   }
@@ -565,8 +590,7 @@ vec3 windowLight(vec3 p, vec3 n, vec3 rd, float t, out float leak, out float fac
   }
   // neon (cyberpunk districts): one vertical or horizontal strip per building, magenta or cyan, in a few districts only
   {
-    float district = hash21(floor(id / 6.0) + 13.0);
-    float neonDensity = district < 0.18 ? 0.35 : 0.03;
+    float neonDensity = neonDistrict(id) ? 0.45 : 0.03;
     float nh = hash21(id + face + 21.0);
     if (nh < neonDensity && t < 90.0){
       vec2 ctr = (id + 0.5)*CELL + lotOffset(id, hs);
@@ -578,12 +602,19 @@ vec3 windowLight(vec3 p, vec3 n, vec3 rd, float t, out float leak, out float fac
       float sx = vert ? smoothstep(0.16, 0.10, abs(uc - u0)) : smoothstep(0.0, 0.2, min(hw3*0.8 - abs(uc), len - abs(uc)));
       float sy = vert ? smoothstep(0.0, 0.2, min(p.y - y0, y0 + len - p.y)) : smoothstep(0.16, 0.10, abs(p.y - y0));
       float strip = sx * sy * step(0.0, min(hw3 - abs(uc), 1.0));
-      vec3 neonCol = hash21(id + 71.0) < 0.55 ? vec3(1.0, 0.15, 0.55) : vec3(0.15, 0.85, 1.0);
+      vec3 neonCol = neonPalette(id);
       float flick = 0.85 + 0.15*step(0.5, hash21(vec2(floor(iTime*13.0), id.x + id.y)));     // cheap tube flicker
-      emit += neonCol * 3.5 * strip * flick;
+      flick *= 1.0 + 0.35*uAudio.z*step(0.6, hash21(id + 81.0));                            // some tubes pulse with the hi-hats
+      emit += neonCol * 4.5 * strip * flick;
       leak += 0.5 * strip;
       neonSpill += neonCol * strip;
     }
+  }
+  {                                                                   // holographic billboard on tall neon-district buildings
+    vec2 ctr = (id + 0.5)*CELL + lotOffset(id, hs);
+    float uc = abs(n.x) > 0.5 ? p.z - ctr.y : p.x - ctr.x;
+    float hw4 = abs(n.x) > 0.5 ? hs.y : hs.x;
+    if (hash21(id + face + 94.0) < 0.5 && t < 120.0){ float mk; vec3 hb = holoBoard(id, uc, p.y, hw4, ht, mk); emit += hb; leak += 0.4*mk; neonSpill += neonPalette(id) * mk; }
   }
   // ground floor: a wide, dim shop front on some faces (the only light at street level besides the lamps)
   if (p.y > 0.4 && p.y < 1.15 && t < 80.0 && hash21(id + face + 8.8) < 0.4){
@@ -645,6 +676,7 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float t, int mat, bool cheap){
   float dens = 0.009 * uParams.y * bank * exp(-0.06*midY);
   float fog = 1.0 - exp(-dens*t);
   vec3 fogCol = skyBase(rd) * vec3(0.75, 0.95, 1.2) * (1.0 + 5.0*flash());  // fog colder than the sky; lightning lifts it
+  { vec2 idf = floor(p.xz / CELL); if (neonDistrict(idf)) fogCol += neonPalette(floor(idf / 3.0)) * 0.012; }   // neon districts tint their own haze
   col = mix(col, vec3(dot(col, vec3(0.3, 0.5, 0.2))), 0.5*fog);              // distance desaturation
   return mix(col, fogCol, fog);
 }
@@ -913,6 +945,7 @@ void main(){
   col = pow(col, vec3(1.0/2.2));
   col = max(col - 0.022, 0.0) / (1.0 - 0.022);                 // crush the blacks (film toe)
   col = pow(col * vec3(1.0, 0.99, 0.97) + vec3(0.0, 0.006, 0.009), vec3(1.0, 0.98, 0.96));   // print-style grade: cyan-green toe, warm highs
+  { float l2 = dot(col, vec3(0.2126, 0.7152, 0.0722)); col = mix(vec3(l2), col, 1.0 + 0.3*smoothstep(0.25, 0.8, l2)); }   // lights a little more vivid
   col = mix(col, texture(tHistory, uv).rgb, uBlend);            // temporal blend: a little motion blur, calmer edges
   { vec4 tx = texture(tText, uv); col = mix(col, tx.rgb, tx.a); }        // title + lyrics, printed into the frame before the grain
   // film grain: three octaves with a little chroma, stronger in the shadows; plus 1 % gate flicker
@@ -1453,7 +1486,7 @@ function frame(now){
   drawBars(a);
   const baseSpeed = 3.0;
   const dropBoost = 1 + 0.8*Math.exp(-Math.max(0, t - dropTime) / 3);
-  camZ = TEST ? parseFloat(params.get('camz') ?? '44') : camZ + (dt/1000) * baseSpeed * ctl.speed * (0.6 + 0.8*a.energy) * dropBoost;
+  camZ = TEST ? parseFloat(params.get('camz') ?? '100') : camZ + (dt/1000) * baseSpeed * ctl.speed * (0.6 + 0.8*a.energy) * dropBoost;
   uniforms.uCamZ.value = camZ;
   uniforms.uParams.value.set(ctl.response, ctl.fog, ctl.speed, 0);
   searchAngle = TEST ? parseFloat(params.get('search') ?? '-1.75') : searchAngle + (dt/1000) * (2*Math.PI/20) * (0.6 + 1.2*a.bass);
