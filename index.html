@@ -149,9 +149,9 @@ float calcAO(vec3 p, vec3 n){
 
 vec3 skyColor(vec3 rd){
   float y = clamp(rd.y, 0.0, 1.0);
-  vec3 top = vec3(0.006, 0.008, 0.016);
-  vec3 hor = vec3(0.11, 0.085, 0.07);
-  return mix(hor, top, pow(y, 0.4));
+  vec3 top = vec3(0.0006, 0.0012, 0.0035);
+  vec3 hor = vec3(0.028, 0.048, 0.075);
+  return mix(hor, top, pow(y, 0.5));
 }
 
 vec3 windowLight(vec3 p, vec3 n, float t){
@@ -166,26 +166,26 @@ vec3 windowLight(vec3 p, vec3 n, float t){
   float bright = 0.5 + 0.9*hash21(c*1.71 + id + 3.3);
   float lod = smoothstep(25.0, 90.0, t);                    // far away: average, no sparkle
   float e = mix(lit*inner.x*inner.y*bright, density*0.22, lod);
-  vec3 tint = mix(vec3(1.0, 0.72, 0.44), vec3(0.95, 0.85, 0.7), hash21(c*0.37 + id*2.1));
-  return tint * 0.9 * e;
+  vec3 tint = mix(vec3(1.0, 0.70, 0.42), vec3(1.0, 0.82, 0.60), hash21(c*0.37 + id*2.1));   // #FFB36B family
+  return tint * 2.2 * e;
 }
 
 vec3 shade(vec3 p, vec3 n, vec3 rd, float t, int mat, bool cheap){
-  vec3 alb = (mat == 2) ? vec3(0.03, 0.03, 0.034) : vec3(0.09, 0.10, 0.12);
+  vec3 alb = (mat == 2) ? vec3(0.010, 0.012, 0.015) : vec3(0.040, 0.055, 0.075);   // wet asphalt is black; facades deep teal-blue
   vec3 L = normalize(vec3(0.45, 0.65, -0.35));
   float hl = 0.5 + 0.5*dot(n, L);
   float dif = mix(hl*hl, max(dot(n, L), 0.0), 0.7);
-  vec3 keyCol = vec3(0.50, 0.62, 0.85)*0.3;                                   // moon: dim, cool
-  vec3 skyAmb = vec3(0.06, 0.075, 0.11) * (0.55 + 0.45*n.y);
-  vec3 street = vec3(1.0, 0.72, 0.48) * 0.06 * exp(-0.15*max(p.y, 0.0)) * (1.0 - max(n.y, 0.0));   // street-level uplight on facades
+  vec3 keyCol = vec3(0.45, 0.62, 0.90)*0.25;                                  // moon: dim, cool
+  vec3 skyAmb = vec3(0.02, 0.035, 0.06) * (0.55 + 0.45*n.y);
   float ao = cheap ? 0.8 : calcAO(p, n);
-  vec3 col = alb * (keyCol*dif + skyAmb*0.9 + street) * mix(0.35, 1.0, ao);
+  vec3 col = alb * (keyCol*dif + skyAmb) * mix(0.15, 1.0, ao);
   if (mat == 1) col += windowLight(p, n, t);
   float roY = p.y - rd.y*t;
   float midY = max(0.5*(roY + p.y), 0.0);
   float dens = 0.011 * (0.7 + 0.6*uAudio.y*uParams.x) * uParams.y * exp(-0.035*midY);   // mids thicken the fog
   float fog = 1.0 - exp(-dens*t);
-  vec3 fogCol = mix(skyColor(rd), vec3(0.13, 0.10, 0.08), 0.3);
+  vec3 fogCol = skyColor(rd) * vec3(0.85, 1.0, 1.15);                       // fog colder than the sky
+  col = mix(col, vec3(dot(col, vec3(0.3, 0.5, 0.2))), 0.5*fog);              // distance desaturation
   return mix(col, fogCol, fog);
 }
 
@@ -204,7 +204,7 @@ vec3 volumetric(vec3 ro, vec3 rd, float tmax, vec2 frag){
     t += dt;
   }
   float mids = 0.7 + 0.6*uAudio.y*uParams.x;
-  return vec3(0.62, 0.56, 0.50) * acc * 0.0045 * ph * mids * uParams.y;   // same family as fog, not a second (cold) haze
+  return vec3(0.35, 0.50, 0.70) * acc * 0.0030 * ph * mids * uParams.y;
 }
 
 vec3 render(vec3 ro, vec3 rd, vec2 uv){
@@ -318,10 +318,11 @@ void main(){
   // tonemap + display transform
   col = aces(col * uExposure);
   col = pow(col, vec3(1.0/2.2));
+  col = max(col - 0.012, 0.0) / (1.0 - 0.012);                 // crush the blacks (film toe)
   // grain: per frame, stronger in the shadows
   float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
   float g = hash21(gl_FragCoord.xy + vec2(uFrame*7.31, uFrame*3.17)) - 0.5;
-  col += g * 0.04 * mix(1.6, 0.4, lum);
+  col += g * 0.04 * mix(1.0, 0.4, lum);
   // vignette
   col *= 1.0 - 0.38 * pow(r, 2.5);
   // 2.39:1 letterbox
