@@ -363,7 +363,9 @@ vec3 windowLight(vec3 p, vec3 n, float t, out float leak, out float facade){
     vec2 d = f - vec2(float(i), float(j)) - 0.5;                   // pixel -> neighbour window centre, cell units
     if (i == 0 && j == 0){
       vec2 rect = smoothstep(0.04, 0.0, abs(d) - vec2(0.25, 0.30));
+      float sodium = hash21(floor(id / 6.0) + 0.5);                                              // per district: older blocks lean sodium-orange
       vec3 tint = mix(vec3(1.0, 0.70, 0.42), vec3(1.0, 0.82, 0.60), hash21(cc*0.37 + id*2.1));
+      tint = mix(tint, vec3(1.0, 0.62, 0.30), 0.5*sodium);
       tint = mix(tint, vec3(1.0, 0.92, 0.80), step(2.0, b));       // the rare very-bright ones go near white
       emit = tint * b * rect.x * rect.y;
     }
@@ -653,6 +655,7 @@ void main(){
   }
   col = pow(col, vec3(1.0/2.2));
   col = max(col - 0.022, 0.0) / (1.0 - 0.022);                 // crush the blacks (film toe)
+  col = pow(col * vec3(1.0, 0.99, 0.97) + vec3(0.0, 0.006, 0.009), vec3(1.0, 0.98, 0.96));   // print-style grade: cyan-green toe, warm highs
   col = mix(col, texture(tHistory, uv).rgb, uBlend);            // temporal blend: a little motion blur, calmer edges
   // grain: per frame, stronger in the shadows
   float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
