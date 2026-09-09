@@ -13,6 +13,7 @@ const hhmm = new Date().toTimeString().slice(0, 5).replace(':', '');
 fs.mkdirSync('shots', { recursive: true });
 
 const errors = [];
+try { const { execSync } = await import('node:child_process'); const b = execSync('pmset -g batt').toString(); if (/Battery Power/.test(b)) console.log('WARNING: on battery power — fps is not meaningful (' + (b.match(/\d+%/) || [''])[0] + ')'); } catch {}
 const browser = await chromium.launch({
   headless: false,
   args: ['--ignore-gpu-blocklist', '--enable-gpu-rasterization', '--autoplay-policy=no-user-gesture-required']
