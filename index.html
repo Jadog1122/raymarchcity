@@ -51,6 +51,7 @@
   <div class="row"><label>相机速度</label><input type="range" id="sSpeed" min="0" max="2" step="0.05" value="1"><span class="v" id="vSpeed">1.00</span></div>
   <div class="row"><label>雾</label><input type="range" id="sFog" min="0" max="2" step="0.05" value="1"><span class="v" id="vFog">1.00</span></div>
   <div class="row"><label>beat 阈值</label><input type="range" id="sBeat" min="1.1" max="2.5" step="0.05" value="1.4"><span class="v" id="vBeat">1.40</span></div>
+  <div class="row"><label><input type="checkbox" id="fps24"> 24 fps 录制</label></div>
   <div class="stat" id="statLine">fps – · scale 0.75</div>
   <div class="keys">F 全屏 · S 存帧 · H 隐藏 · R 录 30s</div>
 </div>
@@ -520,10 +521,10 @@ void main(){
 <script id="post" type="x-shader/x-fragment">
 precision highp float;
 out vec4 fragColor;
-uniform sampler2D tScene, tBright;
+uniform sampler2D tScene, tBright, tHistory;
 uniform vec2  uRes, uBrightRes;
 uniform int   uMode;                 // 0 bright extraction, 1 composite
-uniform float uTime, uFrame, uBloomThr, uBloomStr, uRain, uExposure, uAA;
+uniform float uTime, uFrame, uBloomThr, uBloomStr, uRain, uExposure, uAA, uBlend;
 uniform vec4  uMood;
 
 uint uhash(uint x){ x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16; return x; }
@@ -596,6 +597,7 @@ float rain(vec2 frag, float t){
 
 void main(){
   vec2 uv = gl_FragCoord.xy / uRes;
+  if (uMode == 2){ fragColor = texture(tHistory, uv); return; }   // final blit of the blended frame
   if (uMode == 0){
     vec3 c = texture(tScene, uv).rgb;
     float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
@@ -651,6 +653,7 @@ void main(){
   }
   col = pow(col, vec3(1.0/2.2));
   col = max(col - 0.022, 0.0) / (1.0 - 0.022);                 // crush the blacks (film toe)
+  col = mix(col, texture(tHistory, uv).rgb, uBlend);            // temporal blend: a little motion blur, calmer edges
   // grain: per frame, stronger in the shadows
   float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
   float g = hash21(gl_FragCoord.xy + vec2(uFrame*7.31, uFrame*3.17)) - 0.5;
@@ -734,11 +737,13 @@ const mainMat = new THREE.RawShaderMaterial({
   vertexShader: vert, fragmentShader: document.getElementById('frag').textContent,
   depthTest: false, depthWrite: false
 });
+const rtHist = [0, 1].map(() => new THREE.WebGLRenderTarget(2, 2, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false, stencilBuffer: false }));
+let histCur = 0;
 const postU = {
   tScene: { value: rt.texture }, tBright: { value: rtBright.texture },
   uRes: { value: new THREE.Vector2(1, 1) }, uBrightRes: { value: new THREE.Vector2(1, 1) }, uSceneRes: { value: new THREE.Vector2(1, 1) },
   uMode: { value: 0 }, uTime: { value: 0 }, uFrame: { value: 0 },
-  uBloomThr: { value: 0.8 }, uBloomStr: { value: 0.35 }, uRain: { value: 0.5 }, uExposure: { value: 1.25 }, uAA: { value: params.get('noaa') ? 0 : 1 }, uMood: uniforms.uMood
+  uBloomThr: { value: 0.8 }, uBloomStr: { value: 0.35 }, uRain: { value: 0.5 }, uExposure: { value: 1.25 }, uAA: { value: params.get('noaa') ? 0 : 1 }, uMood: uniforms.uMood, tHistory: { value: rtHist[1].texture }, uBlend: { value: 0 }
 };
 window.__p = postU;
 const postMat = new THREE.RawShaderMaterial({
@@ -761,6 +766,7 @@ function resize(){
   uniforms.iResolution.value.set(rw, rh);
   postU.uBrightRes.value.set(bw, bh);
   postU.uSceneRes.value.set(rw, rh);
+  rtHist[0].setSize(w, h); rtHist[1].setSize(w, h);
   stats.rtW = rw; stats.rtH = rh; stats.renderScale = renderScale; uniforms.uScale.value = renderScale;
 }
 window.addEventListener('resize', resize);
@@ -908,7 +914,7 @@ let rec = null, recTimer = 0;
 const recSeconds = parseFloat(params.get('rec') ?? '30');
 function toggleRecord(){
   if (rec){ clearTimeout(recTimer); rec.stop(); return; }
-  const stream = renderer.domElement.captureStream(30);
+  const stream = renderer.domElement.captureStream(document.getElementById('fps24').checked ? 24 : 30);
   if (audio.kind === 'file' && audio.ctx){ const dst = audio.ctx.createMediaStreamDestination(); audio.analyser.connect(dst); stream.addTrack(dst.stream.getAudioTracks()[0]); }
   const mime = ['video/webm;codecs=vp9', 'video/webm'].find(m => MediaRecorder.isTypeSupported(m));
   const chunks = [];
@@ -1029,8 +1035,14 @@ function frame(now){
   renderer.setRenderTarget(rtBright);
   renderer.render(scenePost, cam);                 // bright extraction (+ auto mipmaps)
   postU.uMode.value = 1; postU.uRes.value.set(window.innerWidth, window.innerHeight);
+  postU.tHistory.value = rtHist[1 - histCur].texture;
+  postU.uBlend.value = (TEST && !params.get('taa') && !REC) ? 0 : 0.25;
+  renderer.setRenderTarget(rtHist[histCur]);
+  renderer.render(scenePost, cam);                 // composite, blended with the previous frame
+  postU.uMode.value = 2; postU.tHistory.value = rtHist[histCur].texture;
   renderer.setRenderTarget(null);
-  renderer.render(scenePost, cam);                 // composite to screen
+  renderer.render(scenePost, cam);                 // to screen
+  histCur = 1 - histCur;
 
   fpsCount++; msAcc += dt; stats.frames++;
   if (now - fpsT >= 1000) {
