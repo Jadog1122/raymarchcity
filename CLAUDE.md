@@ -33,3 +33,4 @@
 - 夜景第一版先定 3 个线性亮度锚点（天空最亮处 / 受光面 / 背光面），再填参数。
 - verify 和 commit 不写在同一条管道里（grep 会吞退出码）；commit 前最近一次输出必须含 VERIFY PASS。
 - GLSL 哈希只用整数哈希（uint 混洗），禁止 fract(sin)/fract(大数乘积)；verify 里保留同 URL 两次加载做差的确定性检查。
+- fps 突然掉一半：先用上一 commit 的 index.html 跑一次基线，区分代码和环境。
