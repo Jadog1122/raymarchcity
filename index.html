@@ -138,8 +138,10 @@ float lotSDF(vec2 id, vec3 p, out int mat){                    // the building(s
     if (p.y > ht - 1.0){
       float ah = ht*0.22;
       b = min(b, sdBox(vec3(q.x, p.y - ht - ah*0.5, q.y), vec3(0.08, ah*0.5, 0.08)));
-      float beacon = sdBox(vec3(q.x, p.y - ht - ah, q.y), vec3(0.10));
-      if (beacon < b){ b = beacon; mat = 3; }
+      if (h > 0.98){                                          // beacons only on the very tallest
+        float beacon = sdBox(vec3(q.x, p.y - ht - ah, q.y), vec3(0.10));
+        if (beacon < b){ b = beacon; mat = 3; }
+      }
     }
   } else {
     b = sdBox(vec3(q.x, p.y - ht*0.5, q.y), vec3(hs.x, ht*0.5, hs.y));
@@ -865,9 +867,9 @@ function cameraAt(t, z){
     return lookAt(ro, [14, 26, z + 200], 2.0, 0.0);
   }
   if (rig === 2){                                           // C: on the river, lateral drift, long lens across the water
-    const zb = Math.round((z - 32) / 56) * 56 + 32;
-    const ro = [-8 + 0.35*age, 3.6, zb + 1.5];
-    return lookAt(ro, [14, 18, zb + 130], 2.6, 0.008*Math.sin(t*0.3));
+    const zb = Math.round((z - 32) / 56) * 56 + 32;             // river band centre; band spans zb-8 .. zb+8
+    const ro = [-9 + 0.4*age, 3.0, zb - 7.5];                    // on the near bank, the whole water in front
+    return lookAt(ro, [10, 14, zb + 110], 2.2, 0.006*Math.sin(t*0.3));
   }
   if (rig === 3){                                           // D: tower push, long lens, slow rise
     const ro = [-0.9, 11 + 0.25*age, z];
