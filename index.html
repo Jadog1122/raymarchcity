@@ -520,10 +520,10 @@ vec3 rainLayers(vec3 ro, vec3 rd, float tmax, vec3 col, vec2 frag){
 vec3 fogScatter(vec3 ro, vec3 rd, float tmax, vec2 frag){
   float tEnd = min(tmax, 70.0);
   if (tEnd < 1.0) return vec3(0.0);
-  float dt = tEnd / 10.0;
+  float dt = tEnd / 14.0;
   float t = dt * hash21(frag + 7.0);
   vec3 acc = vec3(0.0);
-  for (int i = 0; i < 10; i++){
+  for (int i = 0; i < 14; i++){
     vec3 P = ro + rd*t;
     float bank = 0.55 + 0.9*vnoise((P.xz + vec2(iTime*0.6, iTime*0.25)) * 0.025);
     float dens = 0.010 * bank * exp(-0.06*max(P.y, 0.0)) * uParams.y;
@@ -794,6 +794,25 @@ vec3 render(vec3 ro, vec3 rd, vec2 uv){
   col += lampGlow(ro, rd, h.x > 0.0 ? h.x : MAXD);
   col += neonGlow(ro, rd, h.x > 0.0 ? h.x : MAXD);
   col += fogScatter(ro, rd, h.x > 0.0 ? h.x : MAXD, gl_FragCoord.xy);
+  { // distant aircraft: a string of lights crossing the skyline now and then, with a blinking red beacon
+    float tm = h.x > 0.0 ? h.x : MAXD;
+    for (int k = 0; k < 2; k++){
+      float off = float(k) * 137.0;
+      float sp = 12.0 + 6.0*float(k);
+      vec3 A = vec3(-170.0 + mod(iTime*sp + off, 340.0), 48.0 + 8.0*sin(iTime*0.15 + off), uCamZ + 120.0 + 70.0*sin(off));
+      vec3 dir = vec3(1.0, 0.0, 0.0);
+      for (int j = 0; j < 3; j++){
+        vec3 Pj = A + dir * (float(j) - 1.0) * 2.2;
+        vec3 v = Pj - ro; float b = dot(rd, v);
+        if (b > 1.0 && b < tm){
+          float ang = length(v - rd*b) / b;
+          float g = 0.00045 / (ang*ang + 4e-6);
+          vec3 lc = j == 1 ? vec3(1.0, 0.15, 0.1) * step(0.5, fract(iTime*1.3)) : vec3(0.95, 0.95, 1.0);
+          col += lc * g * exp(-0.004*b);
+        }
+      }
+    }
+  }
   col = rainLayers(ro, rd, h.x > 0.0 ? h.x : MAXD, col, gl_FragCoord.xy);
   return col;
 }
@@ -995,6 +1014,12 @@ void main(){
   col = max(col - 0.022, 0.0) / (1.0 - 0.022);                 // crush the blacks (film toe)
   col = pow(col * vec3(1.0, 0.99, 0.97) + vec3(0.0, 0.006, 0.009), vec3(1.0, 0.98, 0.96));   // print-style grade: cyan-green toe, warm highs
   { float l2 = dot(col, vec3(0.2126, 0.7152, 0.0722)); col = mix(vec3(l2), col, 1.0 + 0.3*smoothstep(0.25, 0.8, l2)); }   // lights a little more vivid
+  { // split toning per rig: teal shadows, amber highlights; the aerial and river shots lean colder, the tower push warmer
+    float k = uRig == 0.0 ? 1.3 : (uRig == 2.0 ? 1.2 : (uRig == 3.0 ? 0.8 : 1.0));
+    float l3 = dot(col, vec3(0.2126, 0.7152, 0.0722));
+    col += (1.0 - l3) * vec3(-0.012, 0.004, 0.014) * k + smoothstep(0.45, 1.0, l3) * vec3(0.02, 0.008, -0.012) * (uRig == 3.0 ? 1.6 : 1.0);
+    if (uRig == 3.0) col = mix(vec3(0.5), col, 1.06);                                     // a touch more contrast on the tower push
+  }
   col = mix(col, texture(tHistory, uv).rgb, uBlend);            // temporal blend: a little motion blur, calmer edges
   { vec4 tx = texture(tText, uv); col = mix(col, tx.rgb, tx.a); }        // title + lyrics, printed into the frame before the grain
   // film grain: three octaves with a little chroma, stronger in the shadows; plus 1 % gate flicker
@@ -1237,7 +1262,7 @@ function adaptScale(fps){
   lowSec  = fps < 55 ? lowSec + 1 : 0;
   highSec = fps > 59 ? highSec + 1 : 0;
   if (lowSec >= 2 && renderScale > 0.4){ window.__setRenderScale(renderScale - 0.1); lowSec = 0; highSec = 0; }
-  else if (highSec >= 5 && renderScale < 1.0){ window.__setRenderScale(renderScale + 0.05); highSec = 0; }
+  else if (highSec >= 3 && renderScale < 1.0){ window.__setRenderScale(renderScale + 0.05); highSec = 0; }
 }
 
 // ---------- audio ----------
