@@ -80,6 +80,9 @@ uniform vec2  uBeatAge;      // seconds since the last two beats (99 = none)
 uniform float uFlashAge;     // seconds since the last lightning (rare: every 8th beat or an energy peak)
 uniform vec4  uMood;         // rain, quiet(0..1 slow energy), beam strength at the camera, fade
 uniform float uPath;         // 1 = grid-walk tracer, 0 = reference sphere-trace
+uniform vec3  uCamRo, uCamRt, uCamUp, uCamFw;
+uniform float uFocal;
+uniform vec2  uJitter;
 
 // ---------- hashes ----------
 // integer hashes: exact and identical across shader compiles (fract(sin) / fract(big product) are not)
@@ -568,25 +571,10 @@ vec3 render(vec3 ro, vec3 rd, vec2 uv){
 }
 
 void main(){
-  vec2 frag = gl_FragCoord.xy;
+  vec2 frag = gl_FragCoord.xy + uJitter;                 // sub-pixel jitter for temporal supersampling
   vec2 uv = (2.0*frag - iResolution) / iResolution.y;
   // low, slow dolly down the street, aimed a little toward the landmark; every 12 s a 3 deg tilt up and back
-  float ph = fract(iTime / 12.0);
-  float e  = ph < 0.5 ? ph*2.0 : 2.0 - ph*2.0;  e = e*e*(3.0 - 2.0*e);
-  // narrative keyframes on the river period (56): canyon low -> rise and turn to the landmark over the water -> settle
-  float u = mod(uCamZ - 32.0 + 28.0, 56.0) - 28.0;       // distance to the river centre line (z = 56k+32), -28..28
-  float rise = smoothstep(-26.0, -14.0, u) * (1.0 - smoothstep(-6.0, 8.0, u));
-  rise = rise*rise*(3.0 - 2.0*rise);
-  float pitch = radians(4.5 + 3.0*e + 3.0*rise);        // horizon on the lower third
-  float yaw   = radians(6.0 + 4.0*rise);                // look across the street, vanishing point off-centre
-  float roll  = radians(0.5) * sin(iTime*0.35);
-  float focal = mix(1.7, 2.4, rise);                    // wide in the canyon, longer over the river
-  vec3 ro = vec3(-0.9, 1.5 + 2.5*rise, uCamZ);           // off the centre line
-  vec3 fw = normalize(vec3(sin(yaw)*cos(pitch), sin(pitch), cos(yaw)*cos(pitch)));
-  vec3 rt = normalize(cross(fw, vec3(0.0, 1.0, 0.0)));
-  vec3 up = cross(rt, fw);
-  vec3 rt2 = rt*cos(roll) + up*sin(roll);
-  up = -rt*sin(roll) + up*cos(roll); rt = rt2;
+  vec3 ro = uCamRo, rt = uCamRt, up = uCamUp, fw = uCamFw; float focal = uFocal;   // camera: one source of truth (JS), shared with the post pass
   vec3 rd = normalize(uv.x*rt + uv.y*up + focal*fw);
   gRo = ro;
   vec3 col = render(ro, rd, uv);
@@ -599,7 +587,10 @@ void main(){
 <script id="post" type="x-shader/x-fragment">
 precision highp float;
 out vec4 fragColor;
-uniform sampler2D tScene, tBright, tHistory;
+uniform sampler2D tScene, tBright, tHistory, tTaaHist;
+uniform vec3  uCamRo, uCamRt, uCamUp, uCamFw, uPrevRo, uPrevRt, uPrevUp, uPrevFw;
+uniform float uFocal, uPrevFocal, uTaa;
+uniform vec2  uJitter;
 uniform vec2  uRes, uBrightRes;
 uniform int   uMode;                 // 0 bright extraction, 1 composite
 uniform float uTime, uFrame, uBloomThr, uBloomStr, uRain, uExposure, uAA, uBlend;
@@ -676,6 +667,33 @@ float rain(vec2 frag, float t){
 void main(){
   vec2 uv = gl_FragCoord.xy / uRes;
   if (uMode == 2){ fragColor = texture(tHistory, uv); return; }   // final blit of the blended frame
+  if (uMode == 3){                                                   // TAA: reproject last frame through the previous camera, clamp, blend
+    vec4 cur = texture(tScene, uv);
+    if (uTaa < 0.5){ fragColor = cur; return; }
+    vec2 frag = gl_FragCoord.xy + uJitter;
+    vec2 suv = (2.0*frag - uRes) / uRes.y;
+    vec3 rd = normalize(suv.x*uCamRt + suv.y*uCamUp + uFocal*uCamFw);
+    float depth = cur.a * 320.0;
+    vec3 P = uCamRo + rd * depth;
+    vec3 v = P - uPrevRo; float z = dot(v, uPrevFw);
+    vec3 res = cur.rgb;
+    if (z > 0.05){
+      vec2 pv = vec2(dot(v, uPrevRt), dot(v, uPrevUp)) / z * uPrevFocal;
+      vec2 puv = vec2(0.5 + 0.5*pv.x / (uRes.x / uRes.y), 0.5 + 0.5*pv.y);
+      if (all(greaterThan(puv, vec2(0.002))) && all(lessThan(puv, vec2(0.998)))){
+        vec4 h = texture(tTaaHist, puv);
+        float hd = h.a * 320.0, dl = length(v);
+        if (abs(hd - dl) < 0.05*dl + 0.4){                           // same surface as last frame
+          vec3 mn = cur.rgb, mx = cur.rgb; vec2 inv = 1.0 / uRes;
+          for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++){
+            vec3 sN = texture(tScene, uv + vec2(float(i), float(j)) * inv).rgb; mn = min(mn, sN); mx = max(mx, sN); }
+          res = mix(cur.rgb, clamp(h.rgb, mn, mx), 0.85);
+        }
+      }
+    }
+    fragColor = vec4(res, cur.a);
+    return;
+  }
   if (uMode == 0){
     vec3 c = texture(tScene, uv).rgb;
     float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
@@ -799,7 +817,9 @@ const uniforms = {
   uBeatAge:    { value: new THREE.Vector2(99, 99) },
   uFlashAge:   { value: 99 },
   uMood:       { value: new THREE.Vector4(0.5, 1, 0, 1) },
-  uPath:       { value: params.get('path') === '0' ? 0 : 1 }
+  uPath:       { value: params.get('path') === '0' ? 0 : 1 },
+  uCamRo: { value: new THREE.Vector3() }, uCamRt: { value: new THREE.Vector3() }, uCamUp: { value: new THREE.Vector3() }, uCamFw: { value: new THREE.Vector3() },
+  uFocal: { value: 1.7 }, uJitter: { value: new THREE.Vector2() }
 };
 const beatTimes = [-99, -99];
 let beatCount = 0, flashTime = -99, slowEnergy = 0.5, dropTime = -99;
@@ -817,13 +837,36 @@ const mainMat = new THREE.RawShaderMaterial({
   vertexShader: vert, fragmentShader: document.getElementById('frag').textContent,
   depthTest: false, depthWrite: false
 });
+const rtTaa = [0, 1].map(() => new THREE.WebGLRenderTarget(2, 2, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false, stencilBuffer: false, type: THREE.HalfFloatType }));
+let taaCur = 0, jitterIdx = 0;
+const halton = (i, b) => { let f = 1, r = 0; while (i > 0) { f /= b; r += f * (i % b); i = Math.floor(i / b); } return r; };
+// camera: single source of truth, mirrors what the shader used to compute
+const V = { cross: (a, b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]], norm: a => { const l = Math.hypot(...a); return a.map(x => x / l); } };
+const sstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t*t*(3 - 2*t); };
+function cameraAt(t, z){
+  const ph = (t / 12) % 1; let e = ph < 0.5 ? ph*2 : 2 - ph*2; e = e*e*(3 - 2*e);
+  const u = (((z - 32 + 28) % 56) + 56) % 56 - 28;
+  let rise = sstep(-26, -14, u) * (1 - sstep(-6, 8, u)); rise = rise*rise*(3 - 2*rise);
+  const rad = d => d * Math.PI / 180;
+  const pitch = rad(4.5 + 3*e + 3*rise), yaw = rad(6 + 4*rise), roll = rad(0.5) * Math.sin(t*0.35), focal = 1.7 + 0.7*rise;
+  const ro = [-0.9, 1.5 + 2.5*rise, z];
+  const fw = V.norm([Math.sin(yaw)*Math.cos(pitch), Math.sin(pitch), Math.cos(yaw)*Math.cos(pitch)]);
+  let rt = V.norm(V.cross(fw, [0, 1, 0])); let up = V.cross(rt, fw);
+  const c = Math.cos(roll), s = Math.sin(roll);
+  const rt2 = [rt[0]*c + up[0]*s, rt[1]*c + up[1]*s, rt[2]*c + up[2]*s];
+  up = [-rt[0]*s + up[0]*c, -rt[1]*s + up[1]*c, -rt[2]*s + up[2]*c]; rt = rt2;
+  return { ro, rt, up, fw, focal };
+}
+let camPrev = null;
 const rtHist = [0, 1].map(() => new THREE.WebGLRenderTarget(2, 2, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false, stencilBuffer: false }));
 let histCur = 0;
 const postU = {
   tScene: { value: rt.texture }, tBright: { value: rtBright.texture },
   uRes: { value: new THREE.Vector2(1, 1) }, uBrightRes: { value: new THREE.Vector2(1, 1) }, uSceneRes: { value: new THREE.Vector2(1, 1) },
   uMode: { value: 0 }, uTime: { value: 0 }, uFrame: { value: 0 },
-  uBloomThr: { value: 0.8 }, uBloomStr: { value: 0.35 }, uRain: { value: 0.5 }, uExposure: { value: 1.25 }, uAA: { value: params.get('noaa') ? 0 : 1 }, uMood: uniforms.uMood, tHistory: { value: rtHist[1].texture }, uBlend: { value: 0 }
+  uBloomThr: { value: 0.8 }, uBloomStr: { value: 0.35 }, uRain: { value: 0.5 }, uExposure: { value: 1.25 }, uAA: { value: params.get('noaa') ? 0 : 1 }, uMood: uniforms.uMood, tHistory: { value: rtHist[1].texture }, uBlend: { value: 0 }, tTaaHist: { value: rtTaa[1].texture },
+  uCamRo: uniforms.uCamRo, uCamRt: uniforms.uCamRt, uCamUp: uniforms.uCamUp, uCamFw: uniforms.uCamFw, uFocal: uniforms.uFocal, uJitter: uniforms.uJitter,
+  uPrevRo: { value: new THREE.Vector3() }, uPrevRt: { value: new THREE.Vector3() }, uPrevUp: { value: new THREE.Vector3() }, uPrevFw: { value: new THREE.Vector3() }, uPrevFocal: { value: 1.7 }, uTaa: { value: 0 }
 };
 window.__p = postU;
 const postMat = new THREE.RawShaderMaterial({
@@ -847,6 +890,7 @@ function resize(){
   postU.uBrightRes.value.set(bw, bh);
   postU.uSceneRes.value.set(rw, rh);
   rtHist[0].setSize(w, h); rtHist[1].setSize(w, h);
+  rtTaa[0].setSize(rw, rh); rtTaa[1].setSize(rw, rh);
   stats.rtW = rw; stats.rtH = rh; stats.renderScale = renderScale; uniforms.uScale.value = renderScale;
 }
 window.addEventListener('resize', resize);
@@ -1076,15 +1120,30 @@ const t0 = performance.now();
 let lastRender = 0, fpsCount = 0, fpsT = performance.now(), msAcc = 0;
 function renderFrame(now){
   const t = TEST ? FIXED_TIME : (now - t0) / 1000;
+  const taaOn = !(TEST && !params.get('taa') && !REC);
+  const c = cameraAt(t, camZ);
+  if (!camPrev) camPrev = c;
+  uniforms.uCamRo.value.fromArray(c.ro); uniforms.uCamRt.value.fromArray(c.rt); uniforms.uCamUp.value.fromArray(c.up); uniforms.uCamFw.value.fromArray(c.fw); uniforms.uFocal.value = c.focal;
+  postU.uPrevRo.value.fromArray(camPrev.ro); postU.uPrevRt.value.fromArray(camPrev.rt); postU.uPrevUp.value.fromArray(camPrev.up); postU.uPrevFw.value.fromArray(camPrev.fw); postU.uPrevFocal.value = camPrev.focal;
+  jitterIdx = (jitterIdx + 1) % 16;
+  if (taaOn) uniforms.uJitter.value.set(halton(jitterIdx + 1, 2) - 0.5, halton(jitterIdx + 1, 3) - 0.5); else uniforms.uJitter.value.set(0, 0);
+  postU.uTaa.value = taaOn ? 1 : 0;
   renderer.setRenderTarget(rt);
   renderer.render(sceneRT, cam);
   postU.uTime.value = t; postU.uFrame.value = (TEST && !REC) ? 0 : stats.frames;
+  // TAA: accumulate into the history at scene resolution, then feed the result to bloom + composite
+  postU.uMode.value = 3; postU.uRes.value.set(rt.width, rt.height);
+  postU.tScene.value = rt.texture; postU.tTaaHist.value = rtTaa[1 - taaCur].texture;
+  renderer.setRenderTarget(rtTaa[taaCur]);
+  renderer.render(scenePost, cam);
+  postU.tScene.value = rtTaa[taaCur].texture;
+  taaCur = 1 - taaCur; camPrev = c;
   postU.uMode.value = 0; postU.uRes.value.set(rtBright.width, rtBright.height);
   renderer.setRenderTarget(rtBright);
   renderer.render(scenePost, cam);                 // bright extraction (+ auto mipmaps)
   postU.uMode.value = 1; postU.uRes.value.set(window.innerWidth, window.innerHeight);
   postU.tHistory.value = rtHist[1 - histCur].texture;
-  postU.uBlend.value = (TEST && !params.get('taa') && !REC) ? 0 : 0.25;
+  postU.uBlend.value = (TEST && !params.get('taa') && !REC) ? 0 : 0.15;
   renderer.setRenderTarget(rtHist[histCur]);
   renderer.render(scenePost, cam);                 // composite, blended with the previous frame
   postU.uMode.value = 2; postU.tHistory.value = rtHist[histCur].texture;
