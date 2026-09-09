@@ -515,6 +515,42 @@ vec3 rainLayers(vec3 ro, vec3 rd, float tmax, vec3 col, vec2 frag){
   return col;
 }
 
+// heterogeneous fog + steam, marched: fog banks drift between the blocks; the open air of a street scatters the city glow while
+// walls block it (god rays through the gaps); steam rises from manholes at the block centres and is lit by the lamps.
+vec3 fogScatter(vec3 ro, vec3 rd, float tmax, vec2 frag){
+  float tEnd = min(tmax, 70.0);
+  if (tEnd < 1.0) return vec3(0.0);
+  float dt = tEnd / 10.0;
+  float t = dt * hash21(frag + 7.0);
+  vec3 acc = vec3(0.0);
+  for (int i = 0; i < 10; i++){
+    vec3 P = ro + rd*t;
+    float bank = 0.55 + 0.9*vnoise((P.xz + vec2(iTime*0.6, iTime*0.25)) * 0.025);
+    float dens = 0.010 * bank * exp(-0.06*max(P.y, 0.0)) * uParams.y;
+    float open = clamp(map(P) / 2.5, 0.0, 1.0);
+    vec3 L = vec3(0.75, 0.72, 0.62) * 0.02 * open;
+    vec2 idf = floor(P.xz / CELL);
+    if (neonDistrict(idf)) L += neonPalette(floor(idf / 3.0)) * 0.04 * open;
+    // steam: one manhole per block on the camera's street side, puffs rising and dissolving
+    {
+      float kx = floor(P.x / CELL + 0.5) * CELL;
+      float zc = (floor(P.z / CELL) + 0.5) * CELL + 2.0;
+      float ph = fract(iTime * 0.12 + hash21(vec2(kx, zc)));
+      vec3 c = vec3(kx + 0.6, 0.3 + 2.2*ph, zc);
+      float rr = 0.6 + 1.6*ph;
+      float dd = length((P - c) * vec3(1.0, 0.7, 1.0)) / rr;
+      float puff = smoothstep(1.0, 0.2, dd) * (1.0 - ph) * (0.6 + 0.6*vnoise(P.xz*3.0 + P.y*2.0 + iTime));
+      if (puff > 0.001 && !riverRow(floor(P.z / CELL))){
+        dens += 0.25 * puff;
+        L += (vec3(1.0, 0.72, 0.45) * lampLight(P, vec3(0.0, 2.0, 0.0)) * 0.8 + vec3(0.9, 0.72, 0.52) * 0.04) * puff * 2.0;
+      }
+    }
+    acc += L * dens * dt;
+    t += dt;
+  }
+  return acc * 1.2;
+}
+
 // Signature move: on every beat a ring expands from the camera at 40 u/s; windows it passes flare x2.5 for 0.4 s, then fade.
 float ringBoost(vec3 p, float j){                                   // j: per-window jitter 0..1 (delay + decay rate)
   float dist = length(p.xz - uCamRo.xz);
@@ -752,6 +788,7 @@ vec3 render(vec3 ro, vec3 rd, vec2 uv){
   col += volumetric(ro, rd, h.x > 0.0 ? h.x : MAXD, gl_FragCoord.xy);
   col += lampGlow(ro, rd, h.x > 0.0 ? h.x : MAXD);
   col += neonGlow(ro, rd, h.x > 0.0 ? h.x : MAXD);
+  col += fogScatter(ro, rd, h.x > 0.0 ? h.x : MAXD, gl_FragCoord.xy);
   col = rainLayers(ro, rd, h.x > 0.0 ? h.x : MAXD, col, gl_FragCoord.xy);
   return col;
 }

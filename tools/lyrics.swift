@@ -12,7 +12,7 @@ let sem = DispatchSemaphore(value: 0)
 var authorized = false
 SFSpeechRecognizer.requestAuthorization { s in authorized = (s == .authorized); sem.signal() }
 sem.wait()
-guard authorized else { fputs("speech recognition not authorized (System Settings > Privacy > Speech Recognition)\n", stderr); exit(2) }
+guard authorized else { try? "not authorized".write(to: url.deletingPathExtension().appendingPathExtension("lrc.error"), atomically: true, encoding: .utf8); exit(2) }
 guard let rec = SFSpeechRecognizer(locale: Locale(identifier: localeId)), rec.isAvailable else { fputs("recognizer unavailable for \(localeId)\n", stderr); exit(3) }
 let req = SFSpeechURLRecognitionRequest(url: url)
 req.shouldReportPartialResults = false
@@ -32,7 +32,11 @@ rec.recognitionTask(with: req) { result, error in
     cur.append(seg.substring); lastEnd = seg.timestamp + seg.duration
   }
   if !cur.isEmpty { lines.append((start, cur.joined(separator: " "))) }
-  for (t, s) in lines { let m = Int(t / 60); let sec = t - Double(m * 60); print(String(format: "[%02d:%05.2f]%@", m, sec, s)) }
+  var text = ""
+  for (t, s) in lines { let m = Int(t / 60); let sec = t - Double(m * 60); text += String(format: "[%02d:%05.2f]%@\n", m, sec, s) }
+  let outURL = url.deletingPathExtension().appendingPathExtension("lrc")
+  try? text.write(to: outURL, atomically: true, encoding: .utf8)
+  print(text)
   done.signal()
 }
 done.wait()
