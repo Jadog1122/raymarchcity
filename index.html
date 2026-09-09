@@ -82,7 +82,7 @@ vec2  hash22(vec2 p){ float h = hash21(p); return vec2(h, hash21(p + h + 7.1)); 
 // ---------- scene ----------
 #define CELL   8.0     // block pitch (street to street)
 #define STREET 2.0     // half street width
-#define MAXD   220.0
+#define MAXD   320.0
 int gMat = 0;          // 1 building, 2 ground
 float gDepth = 0.0;    // hit distance of the primary ray (MAXD if sky)
 
@@ -98,7 +98,7 @@ void cellParams(vec2 id, out vec2 hs, out float ht){
 }
 
 #define TOWER_H 90.0
-vec3 towerPos(){ return vec3(12.0, 0.0, uCamZ + 140.0); }   // landmark: always 140 ahead, a little to the right
+vec3 towerPos(){ return vec3(14.0, 0.0, uCamZ + 200.0); }   // landmark: always 200 ahead, a little to the right
 float blink(){ return 1.0 - step(0.5, fract(iTime)); }        // 1 Hz aviation light
 
 float map(vec3 p){
@@ -232,11 +232,11 @@ vec3 windowLight(vec3 p, vec3 n, float t, out float leak){
     float cl = hash21(floor(cc / 3.0) + id*7.7 + face);          // 3x3 cluster value
     float hw = hash21(cc + id*13.17 + face);
     float v  = mix(hw, cl, 0.55);                                   // clustered, not uniform
-    float b  = v < 0.30 ? 0.0 : (v < 0.75 ? 0.12 : (v < 0.93 ? 2.8 : 6.0));   // off / dim / bright / near-white
+    float b  = v < 0.30 ? 0.0 : (v < 0.70 ? 0.10 : (v < 0.90 ? 3.0 : 7.0));   // off / dim / bright / near-white
     b *= step(hash21(cc*2.3 + id + 9.0), prof * occ);
     vec2 d = f - vec2(float(i), float(j)) - 0.5;                   // pixel -> neighbour window centre, cell units
     if (i == 0 && j == 0){
-      vec2 rect = smoothstep(0.04, 0.0, abs(d) - vec2(0.22, 0.27));
+      vec2 rect = smoothstep(0.04, 0.0, abs(d) - vec2(0.25, 0.30));
       vec3 tint = mix(vec3(1.0, 0.70, 0.42), vec3(1.0, 0.82, 0.60), hash21(cc*0.37 + id*2.1));
       tint = mix(tint, vec3(1.0, 0.92, 0.80), step(2.0, b));       // the rare very-bright ones go near white
       emit = tint * b * rect.x * rect.y;
@@ -343,12 +343,18 @@ vec3 render(vec3 ro, vec3 rd, vec2 uv){
 void main(){
   vec2 frag = gl_FragCoord.xy;
   vec2 uv = (2.0*frag - iResolution) / iResolution.y;
-  float ct = iTime;
-  vec3 ro = vec3(0.6*sin(ct*0.23) + 0.25*sin(ct*0.61), 2.6 + 0.15*sin(ct*0.37), uCamZ);
-  vec3 ta = ro + vec3(0.35*sin(ct*0.17), 0.45 + 0.12*sin(ct*0.29), 6.0);
-  vec3 fw = normalize(ta - ro);
+  // low, slow dolly down the street, aimed a little toward the landmark; every 12 s a 3 deg tilt up and back
+  float ph = fract(iTime / 12.0);
+  float e  = ph < 0.5 ? ph*2.0 : 2.0 - ph*2.0;  e = e*e*(3.0 - 2.0*e);
+  float pitch = radians(3.0 + 3.0*e);
+  float yaw   = radians(2.5);
+  float roll  = radians(0.5) * sin(iTime*0.35);
+  vec3 ro = vec3(0.0, 1.5, uCamZ);
+  vec3 fw = normalize(vec3(sin(yaw)*cos(pitch), sin(pitch), cos(yaw)*cos(pitch)));
   vec3 rt = normalize(cross(fw, vec3(0.0, 1.0, 0.0)));
   vec3 up = cross(rt, fw);
+  vec3 rt2 = rt*cos(roll) + up*sin(roll);
+  up = -rt*sin(roll) + up*cos(roll); rt = rt2;
   vec3 rd = normalize(uv.x*rt + uv.y*up + (1.7 + 0.08*uBeat)*fw);   // beat: brief FOV breath (lens push)
   ro += (uv.x*rt + uv.y*up) * 0.03*uBeat;                            // plus a tiny radial origin shift
   vec3 col = render(ro, rd, uv) * (1.0 + 0.035*uBeat);
@@ -517,7 +523,7 @@ const postU = {
   tScene: { value: rt.texture }, tBright: { value: rtBright.texture },
   uRes: { value: new THREE.Vector2(1, 1) }, uBrightRes: { value: new THREE.Vector2(1, 1) },
   uMode: { value: 0 }, uTime: { value: 0 }, uFrame: { value: 0 },
-  uBloomThr: { value: 0.8 }, uBloomStr: { value: 0.35 }, uRain: { value: 0.5 }, uExposure: { value: 1.1 }
+  uBloomThr: { value: 0.8 }, uBloomStr: { value: 0.35 }, uRain: { value: 0.5 }, uExposure: { value: 1.25 }
 };
 const postMat = new THREE.RawShaderMaterial({
   glslVersion: THREE.GLSL3, uniforms: postU,
