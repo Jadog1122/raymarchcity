@@ -541,7 +541,7 @@ vec3 windowLight(vec3 p, vec3 n, vec3 rd, float t, out float leak, out float fac
       vec2 rect = smoothstep(0.04, 0.0, abs(d) - vec2(0.25, 0.30));
       // interior mapping: a shallow room behind the glass (back wall, ceiling lamp, dark floor) that parallaxes with the view
       float room = 1.0;
-      if (b > 0.0 && t < 60.0){
+      if (b > 0.0 && t < 28.0){
         float du = (abs(n.x) > 0.5 ? rd.z : rd.x) / ws.x, dv = rd.y / ws.y, dw = max(-dot(rd, n), 0.02) / 1.1;   // room depth 1.1
         float tw = 1.0 / dw;                                                   // back wall
         float tu = ((du > 0.0 ? 0.5 : -0.5) - d.x) / (abs(du) > 1e-4 ? du : 1e-4);
@@ -553,6 +553,7 @@ vec3 windowLight(vec3 p, vec3 n, vec3 rd, float t, out float leak, out float fac
         else { room = 0.55; }
         float curtain = step(0.75, hash21(cc*1.9 + id + 5.5));                                              // some windows have blinds
         room = mix(room, 0.8, curtain);
+        room = mix(room, 1.0, smoothstep(10.0, 28.0, t));                                                    // far away: flat, no hollow outlines
       }
       float sodium = hash21(floor(id / 6.0) + 0.5);                                              // per district: older blocks lean sodium-orange
       vec3 tint = mix(vec3(1.0, 0.70, 0.42), vec3(1.0, 0.82, 0.60), hash21(cc*0.37 + id*2.1));
