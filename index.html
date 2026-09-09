@@ -277,6 +277,36 @@ vec3 skyColor(vec3 rd){
   return mix(base, cloud, dens * fade * 0.9);
 }
 
+// Distant traffic: headlight pools moving along the lanes of every street except the camera's own (warm only, no tail lights)
+vec3 carLights(vec3 p){
+  vec3 acc = vec3(0.0);
+  for (int axis = 0; axis < 2; axis++){
+    float along = axis == 0 ? p.z : p.x;                       // N-S streets run along z, E-W along x
+    float across = axis == 0 ? p.x : p.z;
+    float k = floor(across / CELL + 0.5);
+    if (axis == 0 && k == 0.0) continue;                       // never on the camera's street
+    float s = across - k*CELL;
+    if (abs(s) > 2.0) continue;
+    for (int lane = 0; lane < 2; lane++){
+      float dir = lane == 0 ? 1.0 : -1.0;
+      vec2 seed = vec2(k*1.7 + float(axis)*31.0, float(lane));
+      float P  = 26.0 + 12.0*hash21(seed);
+      float sp = 8.0 + 6.0*hash21(seed + 4.0);
+      float c0 = dir*iTime*sp + 100.0*hash21(seed + 8.0);
+      float n  = floor((along - c0) / P + 0.5);
+      if (hash21(seed + n*0.31 + 12.0) > 0.5) continue;          // empty slot
+      float cpos = c0 + n*P;
+      vec2 hl2 = axis == 0 ? vec2(k*CELL + dir*0.7, cpos) : vec2(cpos, k*CELL + dir*0.7);
+      vec3 v = p - vec3(hl2.x, 0.45, hl2.y);
+      float d2 = dot(v, v);
+      float ahead = axis == 0 ? v.z : v.x;
+      float fwd = smoothstep(-0.3, 0.8, dir * ahead * inversesqrt(d2 + 1e-3));
+      acc += vec3(1.0, 0.82, 0.60) * fwd / (1.0 + 1.5*d2);
+    }
+  }
+  return acc;
+}
+
 // Signature move: on every beat a ring expands from the camera at 40 u/s; windows it passes flare x2.5 for 0.4 s, then fade.
 float ringBoost(vec3 p, float j){                                   // j: per-window jitter 0..1 (delay + decay rate)
   float dist = length(p.xz - vec2(0.0, uCamZ));
@@ -364,6 +394,7 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float t, int mat, bool cheap){
   float ao = cheap ? 0.8 : calcAO(p, n);
   vec3 col = alb * (keyCol*dif + skyAmb) * mix(0.15, 1.0, ao);
   col += alb * lampLight(p, n);
+  if (mat == 2) col += carLights(p) * 0.05;
   if (mat != 2) col += vec3(1.0, 0.70, 0.42) * 0.015 * ringBoost(p, 0.0);
   float bm = beamAt(p);
   if (bm > 0.001){ vec3 toL = normalize(searchOrigin() - p); col += alb * vec3(0.55, 0.72, 1.0) * 6.0 * bm * max(dot(n, toL), 0.0); }
