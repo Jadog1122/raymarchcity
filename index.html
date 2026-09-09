@@ -79,6 +79,8 @@ uniform vec2  uBeatAge;      // seconds since the last two beats (99 = none)
 float hash11(float n){ return fract(sin(n)*43758.5453123); }
 float hash21(vec2 p){ p = fract(p*vec2(123.34, 456.21)); p += dot(p, p+45.32); return fract(p.x*p.y); }
 vec2  hash22(vec2 p){ float h = hash21(p); return vec2(h, hash21(p + h + 7.1)); }
+float vnoise(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0 - 2.0*f);
+  return mix(mix(hash21(i), hash21(i + vec2(1, 0)), f.x), mix(hash21(i + vec2(0, 1)), hash21(i + vec2(1, 1)), f.x), f.y); }
 
 // ---------- scene ----------
 #define CELL   8.0     // block pitch (street to street)
@@ -110,36 +112,48 @@ float map(vec3 p){
   int mat = 1;
   bool river = mod(id.y, 7.0) == 3.0;                          // one empty row every 7 blocks: water, only reflections
   if (!river){
+    // sidewalk slab (kerb 0.12 high) and street lamps on both sides of every N-S street
+    if (p.y < 0.6){ d = sdBox(vec3(q.x, p.y - 0.06, q.y), vec3(CELL*0.5 - 1.55, 0.06, CELL*0.5 - 1.55)); mat = 2; }
+    float sx = p.x - (floor(p.x / CELL + 0.5))*CELL;            // street-local x, street centre at 0
+    if (abs(sx) < 2.0 && p.y < 3.6){
+      float lx = abs(sx) - 1.75, lz = q.y;
+      float post = max(length(vec2(lx, lz)) - 0.06, abs(p.y - 1.6) - 1.6);
+      float head = sdBox(vec3(lx, p.y - 3.22, lz), vec3(0.13, 0.04, 0.13));
+      if (post < d){ d = post; mat = 1; }
+      if (head < d){ d = head; mat = 6; }
+    }
     vec2 hs; float ht; cellParams(id, hs, ht);
     float h = hash21(id);
     q -= (hash22(id + 11.9) - 0.5) * 2.0 * (CELL*0.5 - STREET - hs);   // slide inside the lot, never into the street
+    float b;
     if (h > 0.95){                                              // tallest 5 %: three setbacks + antenna + red beacon
-      d = sdBox(vec3(q.x, p.y - ht*0.30, q.y), vec3(hs.x, ht*0.30, hs.y));
+      b = sdBox(vec3(q.x, p.y - ht*0.30, q.y), vec3(hs.x, ht*0.30, hs.y));
       if (p.y > ht*0.55){                                       // upper tiers only matter above the first one
-        d = min(d, sdBox(vec3(q.x, p.y - ht*0.40, q.y), vec3(hs.x*0.72, ht*0.40, hs.y*0.72)));
-        d = min(d, sdBox(vec3(q.x, p.y - ht*0.50, q.y), vec3(hs.x*0.46, ht*0.50, hs.y*0.46)));
+        b = min(b, sdBox(vec3(q.x, p.y - ht*0.40, q.y), vec3(hs.x*0.72, ht*0.40, hs.y*0.72)));
+        b = min(b, sdBox(vec3(q.x, p.y - ht*0.50, q.y), vec3(hs.x*0.46, ht*0.50, hs.y*0.46)));
       }
       if (p.y > ht - 1.0){
         float ah = ht*0.22;
-        d = min(d, sdBox(vec3(q.x, p.y - ht - ah*0.5, q.y), vec3(0.08, ah*0.5, 0.08)));
+        b = min(b, sdBox(vec3(q.x, p.y - ht - ah*0.5, q.y), vec3(0.08, ah*0.5, 0.08)));
         float beacon = sdBox(vec3(q.x, p.y - ht - ah, q.y), vec3(0.10));
-        if (beacon < d){ d = beacon; mat = 3; }
+        if (beacon < b){ b = beacon; if (beacon < d) mat = 3; }
       }
     } else {
-      d = sdBox(vec3(q.x, p.y - ht*0.5, q.y), vec3(hs.x, ht*0.5, hs.y));
+      b = sdBox(vec3(q.x, p.y - ht*0.5, q.y), vec3(hs.x, ht*0.5, hs.y));
       if (p.y < ht - 0.5){ }                                    // below the roof the main box is always closer
       else if (hash21(id + 9.1) < 0.20){                             // 20 %: cluster of water tanks / plant rooms
         for (int k = 0; k < 3; k++){
           vec2 o = (hash22(id + 2.2 + float(k)*3.7) - 0.5) * (hs - 0.35) * 1.6;
           float rh = 0.35 + 0.6*hash21(id + 5.5 + float(k));
-          d = min(d, sdBox(vec3(q.x - o.x, p.y - ht - rh*0.5, q.y - o.y), vec3(0.28 + 0.12*float(k), rh*0.5, 0.28)));
+          b = min(b, sdBox(vec3(q.x - o.x, p.y - ht - rh*0.5, q.y - o.y), vec3(0.28 + 0.12*float(k), rh*0.5, 0.28)));
         }
       } else {
         vec2 rs = hs*0.35; float rh = 0.5 + 1.2*hash21(id + 9.1);
         vec2 ro2 = (hash22(id + 2.2) - 0.5)*(hs - rs)*1.6;
-        d = min(d, sdBox(vec3(q.x - ro2.x, p.y - ht - rh*0.5, q.y - ro2.y), vec3(rs.x, rh*0.5, rs.y)));
+        b = min(b, sdBox(vec3(q.x - ro2.x, p.y - ht - rh*0.5, q.y - ro2.y), vec3(rs.x, rh*0.5, rs.y)));
       }
     }
+    if (b < d){ d = b; if (mat != 3) mat = 1; }
   }
   // domain repetition safety: never step past the neighbouring cell's building
   float bound = min(CELL*0.5 - abs(q.x), CELL*0.5 - abs(q.y)) + (CELL*0.5 - 2.0);
@@ -162,7 +176,7 @@ float map(vec3 p){
 
 vec2 raymarch(vec3 ro, vec3 rd){
   float t = 0.0;
-  for (int i = 0; i < 100; i++){
+  for (int i = 0; i < 90; i++){
     vec3 p = ro + rd*t;
     float d = map(p);
     float eps = 0.001*t + 0.0005;
@@ -170,7 +184,7 @@ vec2 raymarch(vec3 ro, vec3 rd){
     t += d;
     if (t > MAXD) return vec2(-1.0, float(i));
   }
-  return vec2(-1.0, 100.0);
+  return vec2(-1.0, 90.0);
 }
 
 vec3 calcNormal(vec3 p){
@@ -209,6 +223,37 @@ float beamAt(vec3 p){
   float rad = 1.2 + 0.05*s;
   return smoothstep(rad, rad*0.35, dist) / (1.0 + 0.00025*s*s);
 }
+// Street lamps: one per block on each side of every N-S street, 3.2 high, tungsten. Nearest four light the scene.
+vec3 lampLight(vec3 p, vec3 n){
+  vec2 idc = floor(p.xz / CELL);
+  if (mod(idc.y, 7.0) == 3.0) return vec3(0.0);
+  float kx = floor(p.x / CELL + 0.5) * CELL;
+  float zc = (idc.y + 0.5) * CELL;
+  float zn = p.z > zc ? zc + CELL : zc - CELL;
+  vec3 acc = vec3(0.0);
+  for (int i = 0; i < 4; i++){
+    vec3 lp = vec3(kx + ((i & 1) == 0 ? -1.75 : 1.75), 3.1, (i < 2) ? zc : zn);
+    vec3 v = lp - p; float d2 = dot(v, v); vec3 l = v * inversesqrt(d2 + 1e-4);
+    float spot = smoothstep(0.10, 0.55, l.y);                      // shines downward
+    acc += spot * max(dot(n, l), 0.0) / (1.0 + 0.6*d2);
+  }
+  return vec3(1.0, 0.72, 0.45) * 1.0 * acc;
+}
+// analytic in-scatter from the lamps along the camera's own street (no map calls)
+vec3 lampGlow(vec3 ro, vec3 rd, float tmax){
+  vec3 acc = vec3(0.0);
+  float z0 = (floor(ro.z / CELL) - 1.0 + 0.5) * CELL;
+  for (int i = 0; i < 12; i++){
+    float z = z0 + float(i >> 1) * CELL;
+    if (mod(floor(z / CELL), 7.0) == 3.0) continue;
+    vec3 lp = vec3(((i & 1) == 0 ? -1.75 : 1.75), 3.1, z);
+    vec3 a = ro - lp; float b = dot(rd, a); float c = dot(a, a);
+    float h = sqrt(max(c - b*b, 0.04));
+    acc += vec3(1.0, 0.72, 0.45) * (atan((tmax + b) / h) - atan(b / h)) / h;
+  }
+  return acc * 0.0008;
+}
+
 // Signature move: on every beat a ring expands from the camera at 40 u/s; windows it passes flare x2.5 for 0.4 s, then fade.
 float ringBoost(vec3 p){
   float dist = length(p.xz - vec2(0.0, uCamZ));
@@ -274,6 +319,7 @@ vec3 windowLight(vec3 p, vec3 n, float t, out float leak, out float facade){
 
 vec3 shade(vec3 p, vec3 n, vec3 rd, float t, int mat, bool cheap){
   if (mat == 3) return vec3(1.0, 0.10, 0.06) * 5.0 * blink();        // aviation beacon
+  if (mat == 6) return vec3(1.0, 0.76, 0.50) * 4.0;                   // lamp head
   vec3 alb = (mat == 2) ? vec3(0.010, 0.012, 0.015) : vec3(0.040, 0.055, 0.075);   // wet asphalt is black; facades deep teal-blue
   if (mat == 5) alb *= 0.8;
   vec3 wEmit = vec3(0.0); float leak = 0.0;
@@ -291,6 +337,7 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float t, int mat, bool cheap){
   vec3 skyAmb = vec3(0.02, 0.035, 0.06) * (0.55 + 0.45*n.y);
   float ao = cheap ? 0.8 : calcAO(p, n);
   vec3 col = alb * (keyCol*dif + skyAmb) * mix(0.15, 1.0, ao);
+  col += alb * lampLight(p, n);
   if (mat != 2) col += vec3(1.0, 0.70, 0.42) * 0.015 * ringBoost(p);
   float bm = beamAt(p);
   if (bm > 0.001){ vec3 toL = normalize(searchOrigin() - p); col += alb * vec3(0.55, 0.72, 1.0) * 6.0 * bm * max(dot(n, toL), 0.0); }
@@ -341,13 +388,14 @@ vec3 render(vec3 ro, vec3 rd, vec2 uv){
     vec3 n = calcNormal(p);
     col = shade(p, n, rd, t, mat, false);
     if (mat == 2){                        // wet ground: one bounce, no AO / volumetrics
+      float puddle = smoothstep(0.52, 0.62, 0.65*vnoise(p.xz*0.35) + 0.35*vnoise(p.xz*0.9 + 3.1));   // puddles: mirror; elsewhere: damp
       vec3 nr = n;                        // rain ripples
-      nr.xz += 0.012 * vec2(sin(p.x*6.1 + iTime*2.3) + sin(p.z*4.7 - iTime*1.9), sin(p.z*5.3 + iTime*2.1) + sin(p.x*3.9 - iTime*1.6));
+      nr.xz += (0.004 + 0.012*puddle) * vec2(sin(p.x*6.1 + iTime*2.3) + sin(p.z*4.7 - iTime*1.9), sin(p.z*5.3 + iTime*2.1) + sin(p.x*3.9 - iTime*1.6));
       n = normalize(nr);
       vec3 rr = reflect(rd, n);
       vec3 rp = p + n*0.02;
       float t2 = 0.0, hit = -1.0;
-      for (int i = 0; i < 20; i++){
+      for (int i = 0; i < 16; i++){
         float d = map(rp + rr*t2);
         if (d < 0.0012*t2 + 0.001){ hit = t2; break; }
         t2 += d*0.95;
@@ -361,10 +409,11 @@ vec3 render(vec3 ro, vec3 rd, vec2 uv){
       }
       float c = max(dot(-rd, n), 0.0);
       float fres = 0.04 + 0.96*pow(1.0 - c, 5.0);
-      col = mix(col, refl, fres*0.85);
+      col = mix(col, refl, fres * mix(0.35, 0.95, puddle));
     }
   }
   col += volumetric(ro, rd, h.x > 0.0 ? h.x : MAXD, gl_FragCoord.xy);
+  col += lampGlow(ro, rd, h.x > 0.0 ? h.x : MAXD);
   return col;
 }
 
