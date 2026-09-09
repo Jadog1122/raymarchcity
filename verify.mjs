@@ -29,6 +29,10 @@ await page.waitForTimeout(3000);
 const stats = await page.evaluate(() => window.__stats);
 await page.screenshot({ path: 'shots/latest.png' });
 fs.copyFileSync('shots/latest.png', `shots/${OUT}-${hhmm}.png`);
+// edge-flicker metric: move the camera 0.02 units and compare
+const FLICKER_MAX = +(process.env.FLICKER_MAX ?? '0');   // 0 = report only
+await page.goto(url + '&camz=16.02'); await page.waitForTimeout(1200);
+await page.screenshot({ path: 'shots/latest-b.png' });
 // ---------- recording check: 5 s via MediaRecorder, count frames with playwright's ffmpeg ----------
 let recFrames = -1;
 if (!NOREC) {
@@ -88,14 +92,24 @@ function decodePNG(buf) {
   return { w, h, bpp, data: out };
 }
 const png = decodePNG(fs.readFileSync('shots/latest.png'));
-let nonBlack = 0, magenta = 0; const n = png.w * png.h;
+const pngB = decodePNG(fs.readFileSync('shots/latest-b.png'));
+let flick = 0;
+for (let i = 0; i < png.w * png.h; i++) {
+  const o = i * png.bpp, la = 0.2126*png.data[o] + 0.7152*png.data[o+1] + 0.0722*png.data[o+2];
+  const lb = 0.2126*pngB.data[o] + 0.7152*pngB.data[o+1] + 0.0722*pngB.data[o+2];
+  if (Math.abs(la - lb) > 51) flick++;
+}
+const flickerPct = 100 * flick / (png.w * png.h);
+let nonBlack = 0, magenta = 0, warm = 0; const n = png.w * png.h;
 const hist = new Float64Array(256);
 for (let i = 0; i < n; i++) {
   const r = png.data[i * png.bpp], g = png.data[i * png.bpp + 1], b = png.data[i * png.bpp + 2];
   if (Math.max(r, g, b) > 12) nonBlack++;
   if (r > 200 && g < 60 && b > 200) magenta++;
   hist[Math.round(0.2126*r + 0.7152*g + 0.0722*b)]++;
+  if (r > 1.3*b && (0.2126*r + 0.7152*g + 0.0722*b) > 51) warm++;
 }
+const warmPct = 100 * warm / n;
 const nonBlackPct = 100 * nonBlack / n, magentaPct = 100 * magenta / n;
 // luminance percentiles: mean of darkest 5 % and brightest 1 %
 function tailMean(fromDark, frac){
@@ -108,7 +122,7 @@ const dark5 = tailMean(true, 0.05), bright1 = tailMean(false, 0.01);
 
 // ---------- report ----------
 console.log('stats:', JSON.stringify(stats));
-console.log(`png: ${png.w}x${png.h}  nonBlack=${nonBlackPct.toFixed(1)}%  magenta=${magentaPct.toFixed(3)}%  dark5=${dark5.toFixed(3)}  bright1=${bright1.toFixed(3)}`);
+console.log(`png: ${png.w}x${png.h}  nonBlack=${nonBlackPct.toFixed(1)}%  magenta=${magentaPct.toFixed(3)}%  dark5=${dark5.toFixed(3)}  bright1=${bright1.toFixed(3)}  warm=${warmPct.toFixed(1)}%  flicker=${flickerPct.toFixed(2)}%`);
 if (errors.length) console.log('console errors:\n  ' + errors.slice(0, 5).join('\n  '));
 
 const fails = [];
@@ -118,6 +132,8 @@ if (!(nonBlackPct > 40)) fails.push(`nonBlack ${nonBlackPct.toFixed(1)}% <= 40%`
 if (!(magentaPct < 0.1)) fails.push(`magenta ${magentaPct.toFixed(3)}% >= 0.1%`);
 if (!(dark5 < 0.03)) fails.push(`dark5 ${dark5.toFixed(3)} >= 0.03 (no true blacks)`);
 if (!(bright1 > 0.9)) fails.push(`bright1 ${bright1.toFixed(3)} <= 0.9 (no highlights)`);
+if (!(warmPct <= 12)) fails.push(`warm ${warmPct.toFixed(1)}% > 12% (two-colour rule broken)`);
+if (FLICKER_MAX > 0 && !(flickerPct <= FLICKER_MAX)) fails.push(`flicker ${flickerPct.toFixed(2)}% > ${FLICKER_MAX}% (edge aliasing)`);
 if (!NOREC && !(recFrames >= 140)) fails.push(`recording ${recFrames} frames < 140 in 5 s`);
 if (errors.some(e => /pageerror|SHADER ERROR/.test(e))) fails.push('page/shader errors in console');
 if (fails.length) { console.log('VERIFY FAIL\n  - ' + fails.join('\n  - ')); process.exit(1); }

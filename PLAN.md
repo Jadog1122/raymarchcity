@@ -83,6 +83,19 @@ M6 决策：
 - 录屏帧数校验不用 ffmpeg（playwright 自带的是精简版），用 Chrome 回放读 totalVideoFrames；录制前关掉第一个窗口并热身 1.5 s，132 帧 → 149 帧。
 - test 模式参数：`&beat=<age>`（光圈年龄秒）、`&search=<rad>`（探照灯方位）、`&rec=<s>`；verify 环境变量 EXTRA / OUT / NOREC。
 
+## M7 · 从作品到成片（开始 00:24）
+顺序：1 立面材质 → 2 路灯/路缘/水洼 → 4 相机叙事 → 3 云 → 5 闪电稀有化 → 6 光圈纹理 → 7 FXAA → 8 车灯。每步 verify + commit。
+方案：
+- 立面：在 shade() 里做楼层带（按窗高 ws.y 分层，层缝 albedo ×0.55）、竖梃（窗列之间细线）、女儿墙（顶部 0.4 单位亮一档）、每楼 albedo 0.75–1.25 变化 + 微色相偏移；全部随 lod 退化。
+- 路灯：每条南北街两侧、每街区一盏，高 3.2，钨丝色；SDF 里加灯杆 + 灯头（mat 6 自发光）；shade() 里查最近两盏做点光（向下锥）；沿相机所在街道的 8 盏用解析式点光雾散射（无 map 调用）。路缘石：格内 sdBox 抬 0.12。水洼：2 阶 value noise mask，水洼内镜面 fresnel 0.85，其他地方反射权重 0.35。
+- 相机：按 z 对河周期（56）做关键帧：峡谷段低 1.5 → 河段升到 4.0 并转向塔 → 回落；uCamZ 驱动，test 可复现。新增 &camz= 参数。
+- 云：skyColor 内把 rd 投到 y=60 平面，3 阶 value noise，云底暖灰被城市照亮，探照灯 beamAt(云点) 加冷色光斑；雾色用无云的 skyBase。
+- 闪电：JS 每 8 个 beat 或 energy>0.85 触发，uFlashAge；test 用 &flash=。
+- 光圈：每扇窗随机延迟 0–150 ms、衰减 4–8/s。
+- FXAA：post 合成里对 tScene 做 mattdesl 版 FXAA（luma 取 tonemap 后），再做 DOF 和色散。verify 新指标：camz 16 与 16.02 两帧亮度差 >0.2 的像素比例。
+- 车灯：shade() 地面上按街道坐标 + 时间画车头灯点光（只暖色），最近 2 辆。
+- verify 新增：暖色像素占比上限（r > 1.3b 且 luma>0.2 的像素 ≤ 12%）。
+
 ## 决策记录
 - 2026-09-08 19:08 M1：第一版曝光像白天（albedo 0.24、key 0.85、雾 0.032 都按白天量级给的）。改为夜景量级：albedo 0.13、key 0.6×、雾 0.011、天空地平线 0.11。规则：夜景场景所有线性量从 0.1 量级起步。
 - three.js 锁 0.170.0（jsdelivr）。RawShaderMaterial + GLSL3，自己声明 precision/out。

@@ -785,7 +785,7 @@ function frame(now){
   uniforms.uBeat.value = a.beat;
   drawBars(a);
   const baseSpeed = 3.0;
-  camZ = TEST ? 16.0 : camZ + (dt/1000) * baseSpeed * ctl.speed * (0.6 + 0.8*a.energy);
+  camZ = TEST ? parseFloat(params.get('camz') ?? '16') : camZ + (dt/1000) * baseSpeed * ctl.speed * (0.6 + 0.8*a.energy);
   uniforms.uCamZ.value = camZ;
   uniforms.uParams.value.set(ctl.response, ctl.fog, ctl.speed, 0);
   searchAngle = TEST ? parseFloat(params.get('search') ?? '-1.75') : searchAngle + (dt/1000) * (2*Math.PI/20) * (0.6 + 1.2*a.bass);
