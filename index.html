@@ -385,10 +385,10 @@ vec3 volumetric(vec3 ro, vec3 rd, float tmax, vec2 frag){
   float tc = abs(den) > 1e-4 ? (b*d2 - d1) / den : 0.5*tmax;      // closest approach along the view ray
   float t0 = clamp(tc - 26.0, 0.0, tmax), t1 = clamp(tc + 26.0, 0.0, tmax);
   if (t1 - t0 < 1.0) return vec3(0.0);
-  float dt = (t1 - t0) / 8.0;
+  float dt = (t1 - t0) / 6.0;
   float t = t0 + dt * hash21(frag);
   float acc = 0.0;
-  for (int i = 0; i < 8; i++){
+  for (int i = 0; i < 6; i++){
     vec3 p = ro + rd*t;
     float bm = beamAt(p);
     if (bm > 0.002){
@@ -475,14 +475,34 @@ out vec4 fragColor;
 uniform sampler2D tScene, tBright;
 uniform vec2  uRes, uBrightRes;
 uniform int   uMode;                 // 0 bright extraction, 1 composite
-uniform float uTime, uFrame, uBloomThr, uBloomStr, uRain, uExposure;
+uniform float uTime, uFrame, uBloomThr, uBloomStr, uRain, uExposure, uAA;
 
 float hash21(vec2 p){ p = fract(p*vec2(123.34, 456.21)); p += dot(p, p+45.32); return fract(p.x*p.y); }
 vec3 aces(vec3 x){ return clamp((x*(2.51*x + 0.03)) / (x*(2.43*x + 0.59) + 0.14), 0.0, 1.0); }
 
-// scene fetch with 2 px far-depth blur (cheap DOF)
+uniform vec2 uSceneRes;
+float lumaTM(vec3 c){ c = aces(c * uExposure); return dot(c, vec3(0.299, 0.587, 0.114)); }
+// FXAA (compact 3.11 variant) on the HDR scene, edges detected on tonemapped luma
+vec4 fxaa(vec2 uv){
+  vec2 inv = 1.0 / uSceneRes;
+  vec4 cM = texture(tScene, uv);
+  vec3 cNW = texture(tScene, uv + vec2(-1.0, -1.0)*inv).rgb, cNE = texture(tScene, uv + vec2(1.0, -1.0)*inv).rgb;
+  vec3 cSW = texture(tScene, uv + vec2(-1.0,  1.0)*inv).rgb, cSE = texture(tScene, uv + vec2(1.0,  1.0)*inv).rgb;
+  float lNW = lumaTM(cNW), lNE = lumaTM(cNE), lSW = lumaTM(cSW), lSE = lumaTM(cSE), lM = lumaTM(cM.rgb);
+  float lMin = min(lM, min(min(lNW, lNE), min(lSW, lSE))), lMax = max(lM, max(max(lNW, lNE), max(lSW, lSE)));
+  if (lMax - lMin < 0.04 || uAA < 0.5) return cM;                    // flat: nothing to do
+  vec2 dir = vec2(-((lNW + lNE) - (lSW + lSE)), ((lNW + lSW) - (lNE + lSE)));
+  float dirReduce = max((lNW + lNE + lSW + lSE) * (0.25 * 0.125), 1.0 / 128.0);
+  float rcp = 1.0 / (min(abs(dir.x), abs(dir.y)) + dirReduce);
+  dir = clamp(dir * rcp, vec2(-8.0), vec2(8.0)) * inv;
+  vec3 rgbA = 0.5 * (texture(tScene, uv + dir*(1.0/3.0 - 0.5)).rgb + texture(tScene, uv + dir*(2.0/3.0 - 0.5)).rgb);
+  vec3 rgbB = rgbA*0.5 + 0.25 * (texture(tScene, uv - dir*0.5).rgb + texture(tScene, uv + dir*0.5).rgb);
+  float lB = lumaTM(rgbB);
+  return vec4((lB < lMin || lB > lMax) ? rgbA : rgbB, cM.a);
+}
+// scene fetch with 2 px far-depth blur (cheap DOF); the centre tap is anti-aliased
 vec3 fetchScene(vec2 uv){
-  vec4 c = texture(tScene, uv);
+  vec4 c = fxaa(uv);
   float r = 2.0 * smoothstep(0.25, 0.75, c.a);
   if (r < 0.2) return c.rgb;
   vec2 o = r / uRes;
@@ -496,9 +516,7 @@ vec3 tent(vec2 uv, float lod){
   vec3 s = textureLod(tBright, uv, lod).rgb * 4.0;
   s += (textureLod(tBright, uv + vec2(ts.x, 0.0), lod).rgb + textureLod(tBright, uv - vec2(ts.x, 0.0), lod).rgb
       + textureLod(tBright, uv + vec2(0.0, ts.y), lod).rgb + textureLod(tBright, uv - vec2(0.0, ts.y), lod).rgb) * 2.0;
-  s += textureLod(tBright, uv + ts, lod).rgb + textureLod(tBright, uv - ts, lod).rgb
-     + textureLod(tBright, uv + vec2(ts.x, -ts.y), lod).rgb + textureLod(tBright, uv + vec2(-ts.x, ts.y), lod).rgb;
-  return s / 16.0;
+  return s / 12.0;
 }
 
 // screen-space rain: two layers of slanted streaks
@@ -535,15 +553,18 @@ void main(){
   vec2 cv = uv - 0.5;
   float r = length(cv) / 0.7071;
   vec2 off = cv * r * (1.5 / uRes);                          // chromatic aberration, 1.5 px at the corners
-  vec3 col = vec3(fetchScene(uv + off).r, fetchScene(uv).g, fetchScene(uv - off).b);
+  vec3 col = fetchScene(uv);
+  float fr = smoothstep(0.3, 1.0, r);                         // fringe only toward the edges: one AA pass, two cheap taps
+  col.r = mix(col.r, texture(tScene, uv + off).r, fr);
+  col.b = mix(col.b, texture(tScene, uv - off).b, fr);
   // bloom: 4 mip levels, 9-tap tent each
   vec3 bloom = (tent(uv, 0.0) + tent(uv, 1.0) + tent(uv, 2.0) + tent(uv, 3.0)) * 0.25;
   col += bloom * uBloomStr;
   // anamorphic streak: horizontal, 6 % of the width, cold
   vec3 streak = vec3(0.0); float wsum = 0.0;
-  for (int i = -8; i <= 8; i++){
-    float f = float(i) / 8.0, w = 1.0 - abs(f);
-    streak += textureLod(tBright, uv + vec2(f*0.03, 0.0), 2.5).rgb * w; wsum += w;
+  for (int i = -4; i <= 4; i++){
+    float f = float(i) / 4.0, w = 1.0 - abs(f);
+    streak += textureLod(tBright, uv + vec2(f*0.03, 0.0), 3.0).rgb * w; wsum += w;
   }
   col += streak / wsum * vec3(0.5, 0.68, 1.0) * 0.5;
   col += rain(gl_FragCoord.xy, uTime) * vec3(0.45, 0.60, 0.85) * 0.10 * (0.4 + 2.0*bloom.g);   // rain, brighter near lights
@@ -631,9 +652,9 @@ const mainMat = new THREE.RawShaderMaterial({
 });
 const postU = {
   tScene: { value: rt.texture }, tBright: { value: rtBright.texture },
-  uRes: { value: new THREE.Vector2(1, 1) }, uBrightRes: { value: new THREE.Vector2(1, 1) },
+  uRes: { value: new THREE.Vector2(1, 1) }, uBrightRes: { value: new THREE.Vector2(1, 1) }, uSceneRes: { value: new THREE.Vector2(1, 1) },
   uMode: { value: 0 }, uTime: { value: 0 }, uFrame: { value: 0 },
-  uBloomThr: { value: 0.8 }, uBloomStr: { value: 0.35 }, uRain: { value: 0.5 }, uExposure: { value: 1.25 }
+  uBloomThr: { value: 0.8 }, uBloomStr: { value: 0.35 }, uRain: { value: 0.5 }, uExposure: { value: 1.25 }, uAA: { value: params.get('noaa') ? 0 : 1 }
 };
 const postMat = new THREE.RawShaderMaterial({
   glslVersion: THREE.GLSL3, uniforms: postU,
@@ -654,6 +675,7 @@ function resize(){
   rtBright.setSize(bw, bh);
   uniforms.iResolution.value.set(rw, rh);
   postU.uBrightRes.value.set(bw, bh);
+  postU.uSceneRes.value.set(rw, rh);
   stats.rtW = rw; stats.rtH = rh; stats.renderScale = renderScale; uniforms.uScale.value = renderScale;
 }
 window.addEventListener('resize', resize);

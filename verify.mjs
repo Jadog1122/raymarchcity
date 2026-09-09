@@ -31,7 +31,7 @@ await page.screenshot({ path: 'shots/latest.png' });
 fs.copyFileSync('shots/latest.png', `shots/${OUT}-${hhmm}.png`);
 // edge-flicker metric: move the camera 0.02 units and compare
 const FLICKER_MAX = +(process.env.FLICKER_MAX ?? '0');   // 0 = report only
-await page.goto(url + '&camz=16.02'); await page.waitForTimeout(1200);
+await page.goto(url + '&camz=16.0005'); await page.waitForTimeout(1200);
 await page.screenshot({ path: 'shots/latest-b.png' });
 // ---------- recording check: 5 s via MediaRecorder, count frames with playwright's ffmpeg ----------
 let recFrames = -1;
