@@ -525,9 +525,9 @@ vec3 windowLight(vec3 p, vec3 n, vec3 rd, float t, out float leak, out float fac
     vec2 ctr = (id + 0.5)*CELL + lotOffset(id, hs);
     float uc = abs(n.x) > 0.5 ? p.z - ctr.y : p.x - ctr.x;
     float hw2 = abs(n.x) > 0.5 ? hs.y : hs.x;
-    float win = smoothstep(0.0, 0.15, hw2*0.7 - abs(uc)) * smoothstep(0.4, 0.5, p.y) * smoothstep(1.15, 1.05, p.y);
-    emit += vec3(1.0, 0.72, 0.45) * 0.35 * win * (0.6 + 0.4*hash21(floor(vec2(uc*2.0, 0.0)) + id));
-    leak += 0.6 * win;
+    float win = smoothstep(0.0, 0.15, hw2*0.45 - abs(uc)) * smoothstep(0.45, 0.55, p.y) * smoothstep(1.15, 1.05, p.y);
+    emit += vec3(1.0, 0.72, 0.45) * 0.12 * win * (0.6 + 0.4*hash21(floor(vec2(uc*2.0, 0.0)) + id));
+    leak += 0.25 * win;
   }
   float lod = smoothstep(15.0, 60.0, t);                            // far: average, no sparkle
   // facade relief: floor slabs, mullions between window columns, a lighter parapet at the top
@@ -782,6 +782,7 @@ void main(){
     fragColor = vec4(c * k, 1.0);
     return;
   }
+  uv += (vec2(hash21(vec2(uFrame, 1.0)), hash21(vec2(uFrame, 2.0))) - 0.5) * 0.7 / uRes;   // gate weave: the frame drifts by a fraction of a pixel
   vec2 cv = uv - 0.5;
   float r = length(cv) / 0.7071;
   vec2 off = cv * r * (1.5 / uRes);                          // chromatic aberration, 1.5 px at the corners
@@ -832,10 +833,14 @@ void main(){
   col = max(col - 0.022, 0.0) / (1.0 - 0.022);                 // crush the blacks (film toe)
   col = pow(col * vec3(1.0, 0.99, 0.97) + vec3(0.0, 0.006, 0.009), vec3(1.0, 0.98, 0.96));   // print-style grade: cyan-green toe, warm highs
   col = mix(col, texture(tHistory, uv).rgb, uBlend);            // temporal blend: a little motion blur, calmer edges
-  // grain: per frame, stronger in the shadows
+  // film grain: three octaves with a little chroma, stronger in the shadows; plus 1 % gate flicker
   float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
-  float g = hash21(gl_FragCoord.xy + vec2(uFrame*7.31, uFrame*3.17)) - 0.5;
-  col += g * 0.04 * mix(1.0, 0.4, lum);
+  vec2 gf = gl_FragCoord.xy + vec2(uFrame*7.31, uFrame*3.17);
+  float g1 = hash21(gf) - 0.5, g2 = hash21(floor(gf*0.5) + 11.0) - 0.5, g3 = hash21(floor(gf*0.25) + 23.0) - 0.5;
+  float gl = 0.6*g1 + 0.3*g2 + 0.1*g3;
+  vec3 gc = vec3(hash21(gf + 31.0), hash21(gf + 47.0), hash21(gf + 59.0)) - 0.5;
+  col += (gl + 0.35*gc) * 0.055 * mix(1.2, 0.35, lum);
+  col *= 1.0 + 0.012*(hash21(vec2(uFrame, 3.0)) - 0.5);
   // vignette
   // 2.39:1 letterbox
   float barH = max(0.0, (uRes.y - uRes.x / 2.39) * 0.5);
