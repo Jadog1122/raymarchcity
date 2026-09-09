@@ -777,7 +777,7 @@ document.body.appendChild(renderer.domElement);
   stats.gpu = dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
 }
 
-let renderScale = 0.75;
+let renderScale = parseFloat(params.get('scale') ?? '0.75');
 const rt = new THREE.WebGLRenderTarget(2, 2, {                    // linear HDR scene, alpha = depth
   minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
   depthBuffer: false, stencilBuffer: false, type: THREE.HalfFloatType
@@ -852,6 +852,15 @@ function resize(){
 window.addEventListener('resize', resize);
 resize();
 window.__setRenderScale = (s) => { renderScale = Math.min(1, Math.max(0.4, s)); resize(); };
+// synchronous GPU benchmark (test only): render n frames back to back, wait for the GPU, return ms per frame
+window.__bench = (n = 30) => {
+  const gl = renderer.getContext();
+  renderFrame(performance.now()); gl.finish();
+  const t0 = performance.now();
+  for (let i = 0; i < n; i++) renderFrame(performance.now());
+  gl.finish(); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
+  return (performance.now() - t0) / n;
+};
 const statLine = document.getElementById('statLine');
 // adaptive: 2 s below 55 -> -0.1 (min 0.4); 5 s above 59 -> +0.05 (max 1.0). Off in test mode.
 let lowSec = 0, highSec = 0;
@@ -1065,6 +1074,25 @@ if (!TEST) {
 
 const t0 = performance.now();
 let lastRender = 0, fpsCount = 0, fpsT = performance.now(), msAcc = 0;
+function renderFrame(now){
+  const t = TEST ? FIXED_TIME : (now - t0) / 1000;
+  renderer.setRenderTarget(rt);
+  renderer.render(sceneRT, cam);
+  postU.uTime.value = t; postU.uFrame.value = (TEST && !REC) ? 0 : stats.frames;
+  postU.uMode.value = 0; postU.uRes.value.set(rtBright.width, rtBright.height);
+  renderer.setRenderTarget(rtBright);
+  renderer.render(scenePost, cam);                 // bright extraction (+ auto mipmaps)
+  postU.uMode.value = 1; postU.uRes.value.set(window.innerWidth, window.innerHeight);
+  postU.tHistory.value = rtHist[1 - histCur].texture;
+  postU.uBlend.value = (TEST && !params.get('taa') && !REC) ? 0 : 0.25;
+  renderer.setRenderTarget(rtHist[histCur]);
+  renderer.render(scenePost, cam);                 // composite, blended with the previous frame
+  postU.uMode.value = 2; postU.tHistory.value = rtHist[histCur].texture;
+  renderer.setRenderTarget(null);
+  renderer.render(scenePost, cam);                 // to screen
+  histCur = 1 - histCur;
+
+}
 function frame(now){
   requestAnimationFrame(frame);
   if (paused) return;
@@ -1108,21 +1136,7 @@ function frame(now){
   slowEnergy += ((a.energy) - slowEnergy) * (dt/1000) / 3.0;   // ~3 s follower
   uniforms.uMood.value.y = TEST ? 1 : Math.min(1, Math.max(0, slowEnergy*1.6));
 
-  renderer.setRenderTarget(rt);
-  renderer.render(sceneRT, cam);
-  postU.uTime.value = t; postU.uFrame.value = (TEST && !REC) ? 0 : stats.frames;
-  postU.uMode.value = 0; postU.uRes.value.set(rtBright.width, rtBright.height);
-  renderer.setRenderTarget(rtBright);
-  renderer.render(scenePost, cam);                 // bright extraction (+ auto mipmaps)
-  postU.uMode.value = 1; postU.uRes.value.set(window.innerWidth, window.innerHeight);
-  postU.tHistory.value = rtHist[1 - histCur].texture;
-  postU.uBlend.value = (TEST && !params.get('taa') && !REC) ? 0 : 0.25;
-  renderer.setRenderTarget(rtHist[histCur]);
-  renderer.render(scenePost, cam);                 // composite, blended with the previous frame
-  postU.uMode.value = 2; postU.tHistory.value = rtHist[histCur].texture;
-  renderer.setRenderTarget(null);
-  renderer.render(scenePost, cam);                 // to screen
-  histCur = 1 - histCur;
+  renderFrame(now);
 
   fpsCount++; msAcc += dt; stats.frames++;
   if (now - fpsT >= 1000) {
