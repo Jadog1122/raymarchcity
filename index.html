@@ -74,6 +74,7 @@ uniform float uCamZ;         // camera travel along the street (integrated in JS
 uniform vec4  uParams;       // response, fog multiplier, speed multiplier, reserved
 uniform float uSearch;       // searchlight azimuth (integrated in JS)
 uniform vec2  uBeatAge;      // seconds since the last two beats (99 = none)
+uniform float uFlashAge;     // seconds since the last lightning (rare: every 8th beat or an energy peak)
 
 // ---------- hashes ----------
 float hash11(float n){ return fract(sin(n)*43758.5453123); }
@@ -286,7 +287,7 @@ float ringBoost(vec3 p){
   }
   return best * uParams.x;
 }
-float flash(){ return uBeatAge.x < 0.1 ? 1.0 : 0.0; }              // 0.1 s lightning: the whole skyline in silhouette
+float flash(){ return uFlashAge < 0.1 ? 1.0 : 0.0; }               // 0.1 s lightning: the whole skyline in silhouette
 
 // Windows: per-building type, clustered 4-class brightness, mid floors densest, warm leak onto the wall.
 // Returns emission; `leak` receives warm light spilling onto the surrounding wall (0..1).
@@ -610,9 +611,11 @@ const uniforms = {
   uCamZ:       { value: 0 },
   uParams:     { value: new THREE.Vector4(1, 1, 1, 0) },
   uSearch:     { value: 0 },
-  uBeatAge:    { value: new THREE.Vector2(99, 99) }
+  uBeatAge:    { value: new THREE.Vector2(99, 99) },
+  uFlashAge:   { value: 99 }
 };
 const beatTimes = [-99, -99];
+let beatCount = 0, flashTime = -99;
 let searchAngle = -1.75;
 const ctl = { response: 1, fog: 1, speed: 1 };
 window.__ctl = ctl;
@@ -751,7 +754,10 @@ function liveAudio(dt, nowSec){
   audio.bassHist.push(raw.bass); audio.bassHistT.push(nowSec);
   while (audio.bassHistT.length && nowSec - audio.bassHistT[0] > 1.0){ audio.bassHist.shift(); audio.bassHistT.shift(); }
   const mean = audio.bassHist.reduce((a, b) => a + b, 0) / audio.bassHist.length;
-  if (raw.bass > audio.beatThreshold*mean && raw.bass > 1e-4 && nowSec - audio.lastBeat > 0.2){ audio.beat = 1; audio.lastBeat = nowSec; beatTimes.unshift(nowSec); beatTimes.length = 2; }
+  if (raw.bass > audio.beatThreshold*mean && raw.bass > 1e-4 && nowSec - audio.lastBeat > 0.2){ audio.beat = 1; audio.lastBeat = nowSec; beatTimes.unshift(nowSec); beatTimes.length = 2;
+    beatCount++;
+    if (beatCount % 8 === 0 || (audio.val.energy > 0.85 && nowSec - flashTime > 4)) flashTime = nowSec;   // lightning is rare
+  }
   audio.beat *= Math.exp(-8*dt);
   // adaptive gain (sliding max with slow decay) + asymmetric smoothing
   for (const k of ['bass', 'mid', 'high', 'energy']){
@@ -873,8 +879,8 @@ function frame(now){
   uniforms.uParams.value.set(ctl.response, ctl.fog, ctl.speed, 0);
   searchAngle = TEST ? parseFloat(params.get('search') ?? '-1.75') : searchAngle + (dt/1000) * (2*Math.PI/20) * (0.6 + 1.2*a.bass);
   uniforms.uSearch.value = searchAngle;
-  if (TEST){ const ba = parseFloat(params.get('beat') ?? '99'); uniforms.uBeatAge.value.set(ba, 99); }
-  else uniforms.uBeatAge.value.set(t - beatTimes[0], t - beatTimes[1]);
+  if (TEST){ const ba = parseFloat(params.get('beat') ?? '99'); uniforms.uBeatAge.value.set(ba, 99); uniforms.uFlashAge.value = parseFloat(params.get('flash') ?? '99'); }
+  else { uniforms.uBeatAge.value.set(t - beatTimes[0], t - beatTimes[1]); uniforms.uFlashAge.value = t - flashTime; }
   postU.uBloomThr.value = 0.8 - 0.4*a.bass;   // heavy bass: bigger halos
   postU.uRain.value = TEST ? 0.5 : 0.25 + 0.75*a.high;
 
