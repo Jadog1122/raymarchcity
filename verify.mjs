@@ -6,6 +6,9 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 
 const M = process.env.M || process.argv[2] || 'M0';
+const EXTRA = process.env.EXTRA || '';          // extra query params, e.g. '&beat=0.9'
+const OUT = process.env.OUT || M;               // name of the timestamped copy
+const NOREC = !!process.env.NOREC;
 const hhmm = new Date().toTimeString().slice(0, 5).replace(':', '');
 fs.mkdirSync('shots', { recursive: true });
 
@@ -19,14 +22,35 @@ const page = await ctx.newPage();
 page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
 page.on('pageerror', e => errors.push('pageerror: ' + e.message));
 
-const url = pathToFileURL(path.resolve('index.html')).href + '?test=1';
+const url = pathToFileURL(path.resolve('index.html')).href + '?test=1' + EXTRA;
 await page.goto(url);
 await page.bringToFront();
 await page.waitForTimeout(3000);
 const stats = await page.evaluate(() => window.__stats);
 await page.screenshot({ path: 'shots/latest.png' });
+fs.copyFileSync('shots/latest.png', `shots/${OUT}-${hhmm}.png`);
+// ---------- recording check: 5 s via MediaRecorder, count frames with playwright's ffmpeg ----------
+let recFrames = -1;
+if (!NOREC) {
+  await ctx.close();                              // no second GPU window while recording
+  const ctx2 = await browser.newContext({ viewport: { width: 1280, height: 540 }, acceptDownloads: true });
+  const p2 = await ctx2.newPage();
+  const dl = p2.waitForEvent('download', { timeout: 20000 });
+  await p2.goto(pathToFileURL(path.resolve('index.html')).href + '?test=1&rec=5');
+  const d = await dl; const webm = path.resolve('shots/rec-test.webm'); await d.saveAs(webm);
+  // count frames by letting Chrome decode the file (playwright's ffmpeg is a minimal build)
+  const p3 = await ctx2.newPage();
+  await p3.goto('about:blank');
+  recFrames = await p3.evaluate(async (bytes) => {
+    const blob = new Blob([new Uint8Array(bytes)], { type: 'video/webm' });
+    const v = document.createElement('video'); v.muted = true; v.src = URL.createObjectURL(blob); document.body.appendChild(v);
+    await new Promise(r => { v.onended = r; v.onerror = r; v.play(); setTimeout(r, 15000); });
+    return v.getVideoPlaybackQuality().totalVideoFrames;
+  }, [...fs.readFileSync(webm)]);
+  console.log(`rec: ${d.suggestedFilename()} ${fs.statSync(webm).size} bytes, ${recFrames} frames in 5 s`);
+  await ctx2.close();
+}
 await browser.close();
-fs.copyFileSync('shots/latest.png', `shots/${M}-${hhmm}.png`);
 
 // ---------- minimal PNG decode (8-bit RGB/RGBA, non-interlaced) ----------
 function decodePNG(buf) {
@@ -94,6 +118,7 @@ if (!(nonBlackPct > 40)) fails.push(`nonBlack ${nonBlackPct.toFixed(1)}% <= 40%`
 if (!(magentaPct < 0.1)) fails.push(`magenta ${magentaPct.toFixed(3)}% >= 0.1%`);
 if (!(dark5 < 0.03)) fails.push(`dark5 ${dark5.toFixed(3)} >= 0.03 (no true blacks)`);
 if (!(bright1 > 0.9)) fails.push(`bright1 ${bright1.toFixed(3)} <= 0.9 (no highlights)`);
+if (!NOREC && !(recFrames >= 140)) fails.push(`recording ${recFrames} frames < 140 in 5 s`);
 if (errors.some(e => /pageerror|SHADER ERROR/.test(e))) fails.push('page/shader errors in console');
 if (fails.length) { console.log('VERIFY FAIL\n  - ' + fails.join('\n  - ')); process.exit(1); }
 console.log('VERIFY PASS  -> shots/latest.png');
