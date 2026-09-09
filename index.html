@@ -468,23 +468,23 @@ vec3 rainLayers(vec3 ro, vec3 rd, float tmax, vec3 col, vec2 frag){
   float wind = 0.06 + 0.10*sin(iTime / 9.0);
   float dens = uMood.x;
   for (int k = 0; k < 3; k++){
-    float d = k == 0 ? 1.4 : (k == 1 ? 4.0 : 9.5);
+    float d = k == 0 ? 2.4 : (k == 1 ? 5.5 : 12.0);
     if (d > tmax) break;
     vec3 P = ro + rd*d;
     float sc = 1.0 + 0.7*float(k);
-    vec2 cs = vec2(0.20, 0.26) * sc;                              // column spacing
-    float len = 0.55 * sc;                                        // streak length (fall + motion blur)
-    vec3 Q = P; Q.x += P.y * wind * 1.5;
+    vec2 cs = vec2(0.17, 0.22) * sc;                              // column spacing
+    float len = 0.22 * sc;                                        // streak length (fall + motion blur)
+    vec3 Q = P; Q.x += P.y * wind * 0.8;
     vec2 cid = floor(Q.xz / cs), cf = fract(Q.xz / cs);
     float ph = hash21(cid + float(k)*17.0);
     float yy = fract((Q.y + iTime * (8.0 + 4.0*ph)) / (len*5.0) + ph);
-    float streak = smoothstep(0.0, 0.05, yy) * (1.0 - smoothstep(0.14, 0.20, yy));
-    float xw = smoothstep(0.10, 0.0, abs(cf.x - 0.5) - 0.02) * smoothstep(0.5, 0.2, abs(cf.y - 0.5));
+    float streak = smoothstep(0.0, 0.04, yy) * (1.0 - smoothstep(0.10, 0.16, yy));
+    float xw = smoothstep(0.06, 0.0, abs(cf.x - 0.5) - 0.01) * smoothstep(0.5, 0.25, abs(cf.y - 0.5));
     float on = step(hash21(cid + 3.0 + float(k)*5.0), dens * 0.85);
     float r = streak * xw * on;
     if (r > 0.002){
-      vec3 L = lightAtPoint(P);
-      col += r * L * (k == 0 ? 1.4 : (k == 1 ? 0.9 : 0.6)) * exp(-0.03*d);
+      vec3 L = min(lightAtPoint(P), vec3(1.2));
+      col += r * L * (k == 0 ? 0.45 : (k == 1 ? 0.35 : 0.3)) * exp(-0.03*d);
     }
   }
   return col;
