@@ -220,24 +220,25 @@ vec2 boxHit(vec3 ro, vec3 rd, vec3 bmin, vec3 bmax){
   vec3 tm = min(t0, t1), tM = max(t0, t1);
   return vec2(max(max(tm.x, tm.y), tm.z), min(min(tM.x, tM.y), tM.z));
 }
-float localMarch(int kind, vec2 id, vec3 ro, vec3 rd, float t0, float t1){   // sphere-trace one component inside its bound
-  float t = t0; int m;
-  for (int i = 0; i < 24; i++){
-    vec3 p = ro + rd*t;
-    float d = kind == 0 ? lotSDF(id, p, m) : (kind == 1 ? lampSDF(id, p, m) : towerSDF(p, m));
-    if (d < 0.0008*t + 0.0004) return t;
-    t += d;
-    if (t > t1 + 0.02) return -1.0;
-  }
-  return -1.0;
+// analytic union of axis-aligned boxes: nearest entry within (tCur, tLim)
+float hitBox(vec3 ro, vec3 rd, vec3 bmin, vec3 bmax, float tCur, float tLim){
+  vec2 h = boxHit(ro, rd, bmin, bmax);
+  if (h.x < h.y && h.x < tLim && h.y > tCur) return max(h.x, tCur);
+  return 1e9;
 }
 float traceDDA(vec3 ro, vec3 rd, float tmax){
   rd.x = abs(rd.x) < 1e-5 ? 1e-5 : rd.x; rd.z = abs(rd.z) < 1e-5 ? 1e-5 : rd.z; rd.y = abs(rd.y) < 1e-6 ? 1e-6 : rd.y;
   float best = tmax;
   if (rd.y < 0.0){ float tg = -ro.y / rd.y; if (tg < best) best = tg; }                       // ground plane
-  vec3 tp0 = towerPos();
-  vec2 tb = boxHit(ro, rd, tp0 + vec3(-4.2, 0.0, -4.2), tp0 + vec3(4.2, TOWER_H + 14.5, 4.2));
-  if (tb.x < tb.y && tb.y > 0.0 && tb.x < best){ float t = localMarch(2, vec2(0.0), ro, rd, max(tb.x, 0.0), min(tb.y, best)); if (t > 0.0) best = t; }
+  { // landmark tower: tiers, spire, beacon
+    vec3 T = towerPos();
+    float t;
+    t = hitBox(ro, rd, T + vec3(-4.2, 0.0, -4.2), T + vec3(4.2, TOWER_H*0.5, 4.2), 0.0, best); best = min(best, t);
+    t = hitBox(ro, rd, T + vec3(-3.0, 0.0, -3.0), T + vec3(3.0, TOWER_H*0.72, 3.0), 0.0, best); best = min(best, t);
+    t = hitBox(ro, rd, T + vec3(-1.9, 0.0, -1.9), T + vec3(1.9, TOWER_H, 1.9), 0.0, best); best = min(best, t);
+    t = hitBox(ro, rd, T + vec3(-0.22, TOWER_H, -0.22), T + vec3(0.22, TOWER_H + 14.0, 0.22), 0.0, best); best = min(best, t);
+    t = hitBox(ro, rd, T + vec3(-0.35, TOWER_H + 13.65, -0.35), T + vec3(0.35, TOWER_H + 14.35, 0.35), 0.0, best); best = min(best, t);
+  }
   vec2 cell = floor(ro.xz / CELL);
   vec2 stp = sign(rd.xz);
   vec2 tDelta = abs(CELL / rd.xz);
@@ -248,17 +249,51 @@ float traceDDA(vec3 ro, vec3 rd, float tmax){
     float tLim = min(tExit, best);
     if (tCur < tLim && !riverRow(cell.y)){
       vec2 c = (cell + 0.5)*CELL;
+      float yIn = ro.y + rd.y*tCur, yOut = ro.y + rd.y*tLim;
+      float yLo = min(yIn, yOut), yHi = max(yIn, yOut);
       float sh = CELL*0.5 - 1.55;
-      vec2 sb = boxHit(ro, rd, vec3(c.x - sh, -0.01, c.y - sh), vec3(c.x + sh, 0.12, c.y + sh));      // slab: the AABB is the shape
-      if (sb.x < sb.y && sb.x < tLim && sb.y > tCur){ float t = max(sb.x, tCur); if (t < best) best = t; }
+      if (yLo < 0.13) best = min(best, hitBox(ro, rd, vec3(c.x - sh, -0.01, c.y - sh), vec3(c.x + sh, 0.12, c.y + sh), tCur, tLim));   // sidewalk slab
       vec2 hs; float ht; cellParams(cell, hs, ht); vec2 off = lotOffset(cell, hs);
-      float top = ht * 1.25 + 2.0;
-      vec2 bb = boxHit(ro, rd, vec3(c.x + off.x - hs.x - 0.45, 0.0, c.y + off.y - hs.y - 0.45), vec3(c.x + off.x + hs.x + 0.45, top, c.y + off.y + hs.y + 0.45));
-      if (bb.x < bb.y && bb.x < tLim && bb.y > tCur){ float t = localMarch(0, cell, ro, rd, max(bb.x, tCur), min(bb.y, tLim)); if (t > 0.0 && t < best) best = t; }
-      for (int k = 0; k < 2; k++){
-        float px = k == 0 ? cell.x*CELL + 1.75 : (cell.x + 1.0)*CELL - 1.75;
-        vec2 lb = boxHit(ro, rd, vec3(px - 0.14, 0.0, c.y - 0.14), vec3(px + 0.14, 3.27, c.y + 0.14));
-        if (lb.x < lb.y && lb.x < tLim && lb.y > tCur){ float t = localMarch(1, cell, ro, rd, max(lb.x, tCur), min(lb.y, tLim)); if (t > 0.0 && t < best) best = t; }
+      vec2 bc = c + off;
+      float h = hash21(cell);
+      if (yLo < ht + 8.0){
+        if (h > 0.95){                                            // setback tower: three nested tiers + antenna + beacon
+          best = min(best, hitBox(ro, rd, vec3(bc.x - hs.x, 0.0, bc.y - hs.y), vec3(bc.x + hs.x, ht*0.6, bc.y + hs.y), tCur, tLim));
+          best = min(best, hitBox(ro, rd, vec3(bc.x - hs.x*0.72, 0.0, bc.y - hs.y*0.72), vec3(bc.x + hs.x*0.72, ht*0.8, bc.y + hs.y*0.72), tCur, tLim));
+          best = min(best, hitBox(ro, rd, vec3(bc.x - hs.x*0.46, 0.0, bc.y - hs.y*0.46), vec3(bc.x + hs.x*0.46, ht, bc.y + hs.y*0.46), tCur, tLim));
+          if (yHi > ht - 0.5){
+            float ah = ht*0.22;
+            best = min(best, hitBox(ro, rd, vec3(bc.x - 0.08, ht, bc.y - 0.08), vec3(bc.x + 0.08, ht + ah, bc.y + 0.08), tCur, tLim));
+            if (h > 0.98) best = min(best, hitBox(ro, rd, vec3(bc.x - 0.10, ht + ah - 0.10, bc.y - 0.10), vec3(bc.x + 0.10, ht + ah + 0.10, bc.y + 0.10), tCur, tLim));
+          }
+        } else {
+          best = min(best, hitBox(ro, rd, vec3(bc.x - hs.x, 0.0, bc.y - hs.y), vec3(bc.x + hs.x, ht, bc.y + hs.y), tCur, tLim));
+          if (yLo < 1.4 && yHi > 1.2 && hash21(cell + 3.9) < 0.6){   // canopy ring (its hole is the building itself)
+            float tr = hitBox(ro, rd, vec3(bc.x - hs.x - 0.45, 1.27, bc.y - hs.y - 0.45), vec3(bc.x + hs.x + 0.45, 1.33, bc.y + hs.y + 0.45), tCur, tLim);
+            if (tr < 1e8){ vec3 pr = ro + rd*tr; if (abs(pr.x - bc.x) > hs.x - 0.02 || abs(pr.z - bc.y) > hs.y - 0.02) best = min(best, tr); }
+          }
+          if (yHi > ht - 0.5){                                     // roof structures
+            if (hash21(cell + 9.1) < 0.20){
+              for (int k = 0; k < 3; k++){
+                vec2 o = (hash22(cell + 2.2 + float(k)*3.7) - 0.5) * (hs - 0.35) * 1.6;
+                float rh = 0.35 + 0.6*hash21(cell + 5.5 + float(k));
+                float w = 0.28 + 0.12*float(k);
+                best = min(best, hitBox(ro, rd, vec3(bc.x + o.x - w, ht, bc.y + o.y - 0.28), vec3(bc.x + o.x + w, ht + rh, bc.y + o.y + 0.28), tCur, tLim));
+              }
+            } else {
+              vec2 rs = hs*0.35; float rh = 0.5 + 1.2*hash21(cell + 9.1);
+              vec2 ro2 = (hash22(cell + 2.2) - 0.5)*(hs - rs)*1.6;
+              best = min(best, hitBox(ro, rd, vec3(bc.x + ro2.x - rs.x, ht, bc.y + ro2.y - rs.y), vec3(bc.x + ro2.x + rs.x, ht + rh, bc.y + ro2.y + rs.y), tCur, tLim));
+            }
+          }
+        }
+      }
+      if (yLo < 3.3){                                              // the two street lamps of this cell (post as a thin box, head box)
+        for (int k = 0; k < 2; k++){
+          float px = k == 0 ? cell.x*CELL + 1.75 : (cell.x + 1.0)*CELL - 1.75;
+          best = min(best, hitBox(ro, rd, vec3(px - 0.06, 0.0, c.y - 0.06), vec3(px + 0.06, 3.2, c.y + 0.06), tCur, tLim));
+          best = min(best, hitBox(ro, rd, vec3(px - 0.13, 3.18, c.y - 0.13), vec3(px + 0.13, 3.26, c.y + 0.13), tCur, tLim));
+        }
       }
     }
     if (tExit >= best) break;
