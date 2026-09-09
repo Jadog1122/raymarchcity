@@ -44,7 +44,7 @@
   <div id="src">
     <button id="btnMic">麦克风</button>
     <button id="btnFile">文件</button>
-    <input id="fileIn" type="file" accept="audio/*" class="hidden">
+    <input id="fileIn" type="file" accept="audio/*,.lrc" class="hidden" multiple>
     <span id="srcName" style="opacity:.6;align-self:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
   </div>
   <div class="row"><label>响应强度</label><input type="range" id="sResp" min="0" max="2" step="0.05" value="1"><span class="v" id="vResp">1.00</span></div>
@@ -701,7 +701,7 @@ void main(){
 <script id="post" type="x-shader/x-fragment">
 precision highp float;
 out vec4 fragColor;
-uniform sampler2D tScene, tBright, tHistory, tTaaHist;
+uniform sampler2D tScene, tBright, tHistory, tTaaHist, tText;
 uniform vec3  uCamRo, uCamRt, uCamUp, uCamFw, uPrevRo, uPrevRt, uPrevUp, uPrevFw;
 uniform float uFocal, uPrevFocal, uTaa;
 uniform vec2  uJitter;
@@ -866,6 +866,7 @@ void main(){
   col = max(col - 0.022, 0.0) / (1.0 - 0.022);                 // crush the blacks (film toe)
   col = pow(col * vec3(1.0, 0.99, 0.97) + vec3(0.0, 0.006, 0.009), vec3(1.0, 0.98, 0.96));   // print-style grade: cyan-green toe, warm highs
   col = mix(col, texture(tHistory, uv).rgb, uBlend);            // temporal blend: a little motion blur, calmer edges
+  { vec4 tx = texture(tText, uv); col = mix(col, tx.rgb, tx.a); }        // title + lyrics, printed into the frame before the grain
   // film grain: three octaves with a little chroma, stronger in the shadows; plus 1 % gate flicker
   float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
   vec2 gf = gl_FragCoord.xy + vec2(uFrame*7.31, uFrame*3.17);
@@ -945,9 +946,55 @@ const beatTimes = [-99, -99];
 let beatCount = 0, flashTime = -99, slowEnergy = 0.5, dropTime = -99;
 const energyHist = [];   // [t, energy] for the last 4 s
 let fadeInAt = -99, fadeOutAt = 1e9;           // seconds (page time)
-const titleEl = document.getElementById('title');
-function setTitle(s){ titleEl.textContent = s || 'NIGHT CITY'; const f = document.getElementById('songName'); if (f) f.value = titleEl.textContent; }
-function cueOpening(t){ fadeInAt = t; fadeOutAt = 1e9; setTimeout(() => titleEl.style.opacity = 1, 1000); setTimeout(() => titleEl.style.opacity = 0, 5000); }
+const titleEl = document.getElementById('title'); titleEl.style.display = 'none';   // text is rendered into the frame instead
+const textCanvas = document.createElement('canvas'); const tctx = textCanvas.getContext('2d');
+const textTex = new THREE.CanvasTexture(textCanvas); textTex.minFilter = THREE.LinearFilter; textTex.generateMipmaps = false;
+const textState = { title: 'NIGHT CITY', titleA: 0, lyric: '', lyricA: 0, drawnKey: '' };
+let lyrics = [];                                             // [{t, text}] from an .lrc
+function parseLRC(txt){
+  const out = [];
+  for (const line of txt.split(/\r?\n/)){
+    const m = line.match(/^\s*((?:\[\d+:\d+(?:\.\d+)?\])+)(.*)$/); if (!m) continue;
+    const text = m[2].trim(); if (!text) continue;
+    for (const st of m[1].matchAll(/\[(\d+):(\d+(?:\.\d+)?)\]/g)) out.push({ t: +st[1]*60 + +st[2], text });
+  }
+  return out.sort((a, b) => a.t - b.t);
+}
+function currentLyric(time){
+  let cur = null, next = null;
+  for (let i = 0; i < lyrics.length; i++){ if (lyrics[i].t <= time){ cur = lyrics[i]; next = lyrics[i + 1] || null; } else break; }
+  if (!cur) return { text: '', a: 0 };
+  const end = next ? next.t : cur.t + 6;
+  const a = Math.min(1, (time - cur.t) / 0.5) * Math.min(1, Math.max(0, (end - time) / 0.5));
+  return { text: cur.text, a };
+}
+function drawText(){
+  const w = window.innerWidth, h = window.innerHeight;
+  if (textCanvas.width !== w || textCanvas.height !== h){ textCanvas.width = w; textCanvas.height = h; }
+  const key = [textState.title, textState.titleA.toFixed(2), textState.lyric, textState.lyricA.toFixed(2), w, h].join('|');
+  if (key === textState.drawnKey) return; textState.drawnKey = key;
+  tctx.clearRect(0, 0, w, h);
+  const x = Math.round(w * 0.06), y = Math.round(h * 0.86), size = Math.max(13, Math.round(h * 0.024));
+  tctx.textBaseline = 'alphabetic';
+  if (textState.titleA > 0.01){
+    tctx.font = `300 ${size}px "Bodoni 72", Didot, "Playfair Display", "Times New Roman", Georgia, serif`;
+    tctx.letterSpacing = '0.42em';
+    tctx.fillStyle = `rgba(232,226,216,${0.9*textState.titleA})`;
+    const t = textState.title.toUpperCase(); tctx.fillText(t, x, y);
+    const tw = tctx.measureText(t).width;
+    tctx.fillStyle = `rgba(232,226,216,${0.35*textState.titleA})`; tctx.fillRect(x, y + Math.round(size*0.55), Math.round(tw), 1);
+  }
+  if (textState.lyricA > 0.01 && textState.lyric){
+    tctx.font = `italic 300 ${Math.round(size*1.05)}px "Bodoni 72", Didot, "Playfair Display", "Times New Roman", Georgia, serif`;
+    tctx.letterSpacing = '0.08em';
+    tctx.fillStyle = `rgba(232,226,216,${0.8*textState.lyricA})`;
+    tctx.fillText(textState.lyric, x, y + Math.round(size*2.1));
+  }
+  textTex.needsUpdate = true;
+}
+function setTitle(s){ textState.title = s || 'NIGHT CITY'; titleEl.textContent = textState.title; const f = document.getElementById('songName'); if (f) f.value = textState.title; }
+let titleCueAt = -99;
+function cueOpening(t){ fadeInAt = t; fadeOutAt = 1e9; titleCueAt = t; }
 let searchAngle = -1.75;
 const ctl = { response: 1, fog: 1, speed: 1 };
 window.__ctl = ctl; window.__u = uniforms;
@@ -1011,7 +1058,7 @@ const postU = {
   tScene: { value: rt.texture }, tBright: { value: rtBright.texture },
   uRes: { value: new THREE.Vector2(1, 1) }, uBrightRes: { value: new THREE.Vector2(1, 1) }, uSceneRes: { value: new THREE.Vector2(1, 1) },
   uMode: { value: 0 }, uTime: { value: 0 }, uFrame: { value: 0 },
-  uBloomThr: { value: 0.8 }, uBloomStr: { value: 0.35 }, uRain: { value: 0.5 }, uExposure: { value: 1.25 }, uAA: { value: params.get('noaa') ? 0 : 1 }, uMood: uniforms.uMood, tHistory: { value: rtHist[1].texture }, uBlend: { value: 0 }, tTaaHist: { value: rtTaa[1].texture },
+  uBloomThr: { value: 0.8 }, uBloomStr: { value: 0.35 }, uRain: { value: 0.5 }, uExposure: { value: 1.25 }, uAA: { value: params.get('noaa') ? 0 : 1 }, uMood: uniforms.uMood, tHistory: { value: rtHist[1].texture }, uBlend: { value: 0 }, tText: { value: textTex }, tTaaHist: { value: rtTaa[1].texture },
   uCamRo: uniforms.uCamRo, uCamRt: uniforms.uCamRt, uCamUp: uniforms.uCamUp, uCamFw: uniforms.uCamFw, uFocal: uniforms.uFocal, uJitter: uniforms.uJitter,
   uPrevRo: { value: new THREE.Vector3() }, uPrevRt: { value: new THREE.Vector3() }, uPrevUp: { value: new THREE.Vector3() }, uPrevFw: { value: new THREE.Vector3() }, uPrevFocal: { value: 1.7 }, uTaa: { value: 0 }
 };
@@ -1247,12 +1294,15 @@ else {
   overlay.addEventListener('click', start);
   btnMic.addEventListener('click', useMic);
   btnFile.addEventListener('click', () => fileIn.click());
-  fileIn.addEventListener('change', () => { if (fileIn.files[0]) useFile(fileIn.files[0]); });
+  fileIn.addEventListener('change', () => { const fs = [...fileIn.files]; const lrc = fs.find(f => /\.lrc$/i.test(f.name)); if (lrc) lrc.text().then(t => { lyrics = parseLRC(t); }); const a = fs.find(f => !/\.lrc$/i.test(f.name)); if (a) useFile(a); });
   window.addEventListener('dragover', e => { e.preventDefault(); overlay.classList.add('drag'); });
   window.addEventListener('dragleave', () => overlay.classList.remove('drag'));
   window.addEventListener('drop', e => {
     e.preventDefault(); overlay.classList.remove('drag');
-    const f = [...e.dataTransfer.files].find(f => /audio|mp3|wav/i.test(f.type + f.name));
+    const files = [...e.dataTransfer.files];
+    const lrc = files.find(f => /\.lrc$/i.test(f.name));
+    if (lrc) lrc.text().then(t => { lyrics = parseLRC(t); srcName.textContent += ` · ${lyrics.length} 行歌词`; });
+    const f = files.find(f => /audio|mp3|wav|m4a|flac|ogg/i.test(f.type + f.name));
     if (!f) return;
     if (!audio.ctx) start();
     useFile(f);
@@ -1383,6 +1433,12 @@ function frame(now){
   slowEnergy += ((a.energy) - slowEnergy) * (dt/1000) / 3.0;   // ~3 s follower
   uniforms.uMood.value.y = TEST ? 1 : Math.min(1, Math.max(0, slowEnergy*1.6));
   uniforms.uSection.value.set(TEST ? parseFloat(params.get('section') ?? '0') : audio.section, TEST ? 5 : audio.sectionAge);
+  { const tp = (now - t0) / 1000, since = tp - titleCueAt;
+    const intro = since < 1 ? 0 : (since < 2.2 ? (since - 1) / 1.2 : (since < 6 ? 1 : Math.max(0.45, 1 - (since - 6) / 2)));   // fade in, hold, settle to a signature
+    textState.titleA = TEST ? 0.6 : Math.min(1, Math.max(0, intro)) * uniforms.uMood.value.w;
+    const L = TEST ? { text: params.get('lyric') || '', a: 1 } : (audio.kind === 'file' ? currentLyric(player.currentTime) : { text: '', a: 0 });
+    textState.lyric = L.text; textState.lyricA = L.a * uniforms.uMood.value.w;
+    drawText(); }
 
   renderFrame(now);
 
