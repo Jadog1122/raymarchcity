@@ -707,7 +707,7 @@ uniform float uFocal, uPrevFocal, uTaa;
 uniform vec2  uJitter;
 uniform vec2  uRes, uBrightRes;
 uniform int   uMode;                 // 0 bright extraction, 1 composite
-uniform float uTime, uFrame, uBloomThr, uBloomStr, uRain, uExposure, uAA, uBlend;
+uniform float uTime, uFrame, uBloomThr, uBloomStr, uRain, uExposure, uAA, uBlend, uRig;
 uniform vec4  uMood;
 
 uint uhash(uint x){ x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16; return x; }
@@ -834,21 +834,29 @@ void main(){
   }
   col += streak / wsum * vec3(0.5, 0.68, 1.0) * 0.3;
   col += rain(gl_FragCoord.xy, uTime) * vec3(0.45, 0.60, 0.85) * 0.10 * (0.4 + 2.0*bloom.g + 8.0*uMood.z);   // rain, brighter near lights and inside the searchlight
-  // a few raindrops on the lens: tiny inverted refractions that slide down and are replaced every 4 s
-  {
+  // raindrops on the lens (aerial and river shots only): out-of-focus meniscus refractions that only show where light is behind them,
+  // a specular rim, and a faint trail as they run down; replaced every 6 s
+  if (uRig == 0.0 || uRig == 2.0){
     float aspect = uRes.x / uRes.y;
-    float slot = floor(uTime / 4.0), ph = fract(uTime / 4.0);
-    for (int i = 0; i < 4; i++){
-      vec2 c = vec2(hash21(vec2(slot, float(i)*3.1)) * aspect, hash21(vec2(slot + 7.0, float(i)*1.7)));
-      c.y -= ph * 0.05 * (0.5 + hash21(vec2(slot, float(i) + 9.0)));
-      float rad = 0.010 + 0.012*hash21(vec2(float(i), slot + 2.0));
-      vec2 q = vec2(uv.x * aspect, uv.y) - c;
+    float slot = floor(uTime / 6.0), ph = fract(uTime / 6.0);
+    for (int i = 0; i < 3; i++){
+      float fi = float(i);
+      vec2 c = vec2(0.1 + 0.8*hash21(vec2(slot, fi*3.1)) * aspect, 0.3 + 0.6*hash21(vec2(slot + 7.0, fi*1.7)));
+      float rad = 0.012 + 0.014*hash21(vec2(fi, slot + 2.0));
+      float run = smoothstep(0.35, 1.0, ph) * 0.3 * hash21(vec2(slot, fi + 9.0));
+      vec2 q = vec2(uv.x * aspect, uv.y) - (c - vec2(0.0, run));
       float d = length(q) / rad;
+      float trail = smoothstep(0.3, 0.0, abs(q.x) / rad) * step(0.0, q.y) * step(q.y, run) * 0.5;
+      if (trail > 0.0) col = mix(col, textureLod(tScene, uv, 2.0).rgb, trail * 0.6);
       if (d < 1.0){
-        vec2 ruv = uv - q * (0.9 / rad) * rad * 1.6;                 // refraction: sample the flipped surroundings
-        vec3 through = texture(tScene, clamp(ruv, 0.0, 1.0)).rgb;
-        float rim = smoothstep(0.55, 1.0, d) * 0.06;
-        col = mix(col, through + rim, smoothstep(1.0, 0.85, d) * 0.85);
+        vec3 nrm = vec3(q / rad, sqrt(max(0.0, 1.0 - d*d)));
+        vec2 off = -nrm.xy * 0.05 * (1.0 - nrm.z*0.6);
+        vec3 through = textureLod(tScene, uv + off, 2.5).rgb;
+        float lum = dot(through, vec3(0.3, 0.6, 0.1));
+        float rim = pow(max(0.0, dot(nrm, normalize(vec3(-0.5, 0.7, 0.55)))), 28.0) * 0.06;
+        float vis = 0.25 + 0.75*smoothstep(0.02, 0.35, lum);          // reads only against light
+        float edge = smoothstep(1.0, 0.82, d);
+        col = mix(col, through * 1.15 + rim, edge * vis);
       }
     }
   }
@@ -1005,7 +1013,7 @@ const mainMat = new THREE.RawShaderMaterial({
   vertexShader: vert, fragmentShader: document.getElementById('frag').textContent,
   depthTest: false, depthWrite: false
 });
-const rtTaa = [0, 1].map(() => new THREE.WebGLRenderTarget(2, 2, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false, stencilBuffer: false, type: THREE.HalfFloatType }));
+const rtTaa = [0, 1].map(() => new THREE.WebGLRenderTarget(2, 2, { minFilter: THREE.LinearMipmapLinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false, stencilBuffer: false, type: THREE.HalfFloatType, generateMipmaps: true }));
 let taaCur = 0, jitterIdx = 0;
 const halton = (i, b) => { let f = 1, r = 0; while (i > 0) { f /= b; r += f * (i % b); i = Math.floor(i / b); } return r; };
 // camera: single source of truth, mirrors what the shader used to compute
@@ -1058,7 +1066,7 @@ const postU = {
   tScene: { value: rt.texture }, tBright: { value: rtBright.texture },
   uRes: { value: new THREE.Vector2(1, 1) }, uBrightRes: { value: new THREE.Vector2(1, 1) }, uSceneRes: { value: new THREE.Vector2(1, 1) },
   uMode: { value: 0 }, uTime: { value: 0 }, uFrame: { value: 0 },
-  uBloomThr: { value: 0.8 }, uBloomStr: { value: 0.35 }, uRain: { value: 0.5 }, uExposure: { value: 1.25 }, uAA: { value: params.get('noaa') ? 0 : 1 }, uMood: uniforms.uMood, tHistory: { value: rtHist[1].texture }, uBlend: { value: 0 }, tText: { value: textTex }, tTaaHist: { value: rtTaa[1].texture },
+  uBloomThr: { value: 0.8 }, uBloomStr: { value: 0.35 }, uRain: { value: 0.5 }, uExposure: { value: 1.25 }, uAA: { value: params.get('noaa') ? 0 : 1 }, uMood: uniforms.uMood, tHistory: { value: rtHist[1].texture }, uBlend: { value: 0 }, tText: { value: textTex }, uRig: { value: 1 }, tTaaHist: { value: rtTaa[1].texture },
   uCamRo: uniforms.uCamRo, uCamRt: uniforms.uCamRt, uCamUp: uniforms.uCamUp, uCamFw: uniforms.uCamFw, uFocal: uniforms.uFocal, uJitter: uniforms.uJitter,
   uPrevRo: { value: new THREE.Vector3() }, uPrevRt: { value: new THREE.Vector3() }, uPrevUp: { value: new THREE.Vector3() }, uPrevFw: { value: new THREE.Vector3() }, uPrevFocal: { value: 1.7 }, uTaa: { value: 0 }
 };
@@ -1365,6 +1373,7 @@ function renderFrame(now){
   jitterIdx = (jitterIdx + 1) % 16;
   if (taaOn) uniforms.uJitter.value.set(halton(jitterIdx + 1, 2) - 0.5, halton(jitterIdx + 1, 3) - 0.5); else uniforms.uJitter.value.set(0, 0);
   postU.uTaa.value = taaOn ? 1 : 0;
+  postU.uRig.value = rig;
   renderer.setRenderTarget(rt);
   renderer.render(sceneRT, cam);
   postU.uTime.value = t; postU.uFrame.value = (TEST && !REC) ? 0 : stats.frames;

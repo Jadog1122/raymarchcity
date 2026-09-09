@@ -7,6 +7,7 @@ let args = CommandLine.arguments
 guard args.count >= 2 else { fputs("usage: lyrics <audio file> [locale]\n", stderr); exit(1) }
 let url = URL(fileURLWithPath: args[1])
 let localeId = args.count > 2 ? args[2] : "en-US"
+DispatchQueue.global().async {
 let sem = DispatchSemaphore(value: 0)
 var authorized = false
 SFSpeechRecognizer.requestAuthorization { s in authorized = (s == .authorized); sem.signal() }
@@ -36,3 +37,5 @@ rec.recognitionTask(with: req) { result, error in
 }
 done.wait()
 exit(exitCode)
+}
+RunLoop.main.run()
