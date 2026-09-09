@@ -41,3 +41,9 @@
 - 根因：ms-playwright 的 ffmpeg-mac 只带录屏需要的编码器和 muxer，不是通用 ffmpeg；系统也没装 ffprobe。
 - 修法：让 Chrome 回放 webm，读 `getVideoPlaybackQuality().totalVideoFrames`。
 - 下次如何避免：依赖外部二进制前先跑一次 `--version`/最小命令确认能力；能用浏览器自己做的校验优先用浏览器。
+
+## 8. M7 第 6 步：verify 没过却 commit 了（00:45）
+- 症状：fps 48 < 50，verify 退出码 1，但 `node verify.mjs | grep ... && git commit` 里 grep 的退出码盖掉了 verify 的，commit 照常发生。
+- 根因：把 verify 和 commit 串在一条管道里，且用 grep 过滤输出；管道退出码是最后一个命令的。
+- 修法：改成 `set -o pipefail` 或先 verify 存退出码再决定 commit；本条目发生后立即补做性能修复再重新 verify。
+- 下次如何避免：CLAUDE.md 规则——verify 和 commit 不写在同一条管道里；commit 前必须看到 `VERIFY PASS` 字样出现在最近一次输出中。
