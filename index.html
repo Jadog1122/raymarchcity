@@ -331,7 +331,8 @@ vec3 lampLight(vec3 p, vec3 n){
     vec3 lp = vec3(kx + ((i & 1) == 0 ? -1.75 : 1.75), 3.1, (i < 2) ? zc : zn);
     vec3 v = lp - p; float d2 = dot(v, v); vec3 l = v * inversesqrt(d2 + 1e-4);
     float spot = smoothstep(0.10, 0.55, l.y);                      // shines downward
-    acc += spot * max(dot(n, l), 0.0) / (1.0 + 0.6*d2);
+    float nl = n.y > 1.5 ? 1.0 : max(dot(n, l), 0.0);
+    acc += spot * nl / (1.0 + 0.6*d2);
   }
   return vec3(1.0, 0.72, 0.45) * 0.7 * acc;
 }
@@ -420,7 +421,8 @@ vec3 neonLight(vec3 p, vec3 n){
                        : vec3(ctr.x + u0, y0 + len*0.5, ctr.y + (p.z > ctr.y ? hs.y : -hs.y) + 0.05*sign(p.z - ctr.y));
       vec3 v = lp - p; float d2 = dot(v, v); vec3 l = v * inversesqrt(d2 + 1e-4);
       vec3 neonCol = hash21(id + 71.0) < 0.55 ? vec3(1.0, 0.15, 0.55) : vec3(0.15, 0.85, 1.0);
-      acc += neonCol * max(dot(n, l), 0.0) * 1.2 / (1.0 + 0.25*d2);
+      float nl = n.y > 1.5 ? 1.0 : max(dot(n, l), 0.0);
+      acc += neonCol * nl * 1.2 / (1.0 + 0.25*d2);
     }
   }
   return acc;
@@ -450,6 +452,42 @@ vec3 neonGlow(vec3 ro, vec3 rd, float tmax){
     }
   }
   return acc * 0.0025 * (0.5 + uMood.x);                    // more rain, more haze
+}
+
+// light arriving at a point in the air (for rain drops): city glow + lamps + neon + searchlight
+vec3 lightAtPoint(vec3 P){
+  vec3 L = vec3(0.9, 0.72, 0.52) * 0.012;
+  L += vec3(1.0, 0.72, 0.45) * lampLight(P, vec3(0.0, 2.0, 0.0)) / vec3(1.0, 0.72, 0.45) * 1.0;
+  L += neonLight(P, vec3(0.0, 2.0, 0.0)) * 0.8;
+  L += beamAt(P) * vec3(0.55, 0.72, 1.0) * 5.0;
+  return L;
+}
+// world-space rain: three sheets at fixed distances from the camera, each a 3D field of falling streaks lit by the lights around them.
+// Rain against the dark sky stays dark; rain in a lamp cone or next to neon lights up.
+vec3 rainLayers(vec3 ro, vec3 rd, float tmax, vec3 col, vec2 frag){
+  float wind = 0.06 + 0.10*sin(iTime / 9.0);
+  float dens = uMood.x;
+  for (int k = 0; k < 3; k++){
+    float d = k == 0 ? 1.4 : (k == 1 ? 4.0 : 9.5);
+    if (d > tmax) break;
+    vec3 P = ro + rd*d;
+    float sc = 1.0 + 0.7*float(k);
+    vec2 cs = vec2(0.20, 0.26) * sc;                              // column spacing
+    float len = 0.55 * sc;                                        // streak length (fall + motion blur)
+    vec3 Q = P; Q.x += P.y * wind * 1.5;
+    vec2 cid = floor(Q.xz / cs), cf = fract(Q.xz / cs);
+    float ph = hash21(cid + float(k)*17.0);
+    float yy = fract((Q.y + iTime * (8.0 + 4.0*ph)) / (len*5.0) + ph);
+    float streak = smoothstep(0.0, 0.05, yy) * (1.0 - smoothstep(0.14, 0.20, yy));
+    float xw = smoothstep(0.10, 0.0, abs(cf.x - 0.5) - 0.02) * smoothstep(0.5, 0.2, abs(cf.y - 0.5));
+    float on = step(hash21(cid + 3.0 + float(k)*5.0), dens * 0.85);
+    float r = streak * xw * on;
+    if (r > 0.002){
+      vec3 L = lightAtPoint(P);
+      col += r * L * (k == 0 ? 1.4 : (k == 1 ? 0.9 : 0.6)) * exp(-0.03*d);
+    }
+  }
+  return col;
 }
 
 // Signature move: on every beat a ring expands from the camera at 40 u/s; windows it passes flare x2.5 for 0.4 s, then fade.
@@ -681,6 +719,7 @@ vec3 render(vec3 ro, vec3 rd, vec2 uv){
   col += volumetric(ro, rd, h.x > 0.0 ? h.x : MAXD, gl_FragCoord.xy);
   col += lampGlow(ro, rd, h.x > 0.0 ? h.x : MAXD);
   col += neonGlow(ro, rd, h.x > 0.0 ? h.x : MAXD);
+  col = rainLayers(ro, rd, h.x > 0.0 ? h.x : MAXD, col, gl_FragCoord.xy);
   return col;
 }
 
@@ -833,7 +872,7 @@ void main(){
     streak += textureLod(tBright, uv + vec2(f*0.03, 0.0), 3.0).rgb * w; wsum += w;
   }
   col += streak / wsum * vec3(0.5, 0.68, 1.0) * 0.3;
-  col += rain(gl_FragCoord.xy, uTime) * vec3(0.45, 0.60, 0.85) * 0.10 * (0.4 + 2.0*bloom.g + 8.0*uMood.z);   // rain, brighter near lights and inside the searchlight
+  col += rain(gl_FragCoord.xy, uTime) * vec3(0.45, 0.60, 0.85) * 0.03 * (0.4 + 2.0*bloom.g + 8.0*uMood.z);   // faint far rain; the real rain is world-space, lit by the lights
   // raindrops on the lens (aerial and river shots only): out-of-focus meniscus refractions that only show where light is behind them,
   // a specular rim, and a faint trail as they run down; replaced every 6 s
   if (uRig == 0.0 || uRig == 2.0){
