@@ -843,7 +843,7 @@ vec3 render(vec3 ro, vec3 rd, vec2 uv){
         vec3 v = Pj - ro; float b = dot(rd, v);
         if (b > 1.0 && b < tm){
           float ang = length(v - rd*b) / b;
-          float g = 0.00045 / (ang*ang + 4e-6);
+          float g = min(0.00012 / (ang*ang + 3e-6), 2.5);                // small distant lights, never a blob
           vec3 lc = j == 1 ? vec3(1.0, 0.15, 0.1) * step(0.5, fract(iTime*1.3)) : vec3(0.95, 0.95, 1.0);
           col += lc * g * exp(-0.004*b);
         }
@@ -996,7 +996,7 @@ void main(){
   uv += (vec2(hash21(vec2(uFrame, 1.0)), hash21(vec2(uFrame, 2.0))) - 0.5) * 0.7 / uRes;   // gate weave: the frame drifts by a fraction of a pixel
   vec2 cv = uv - 0.5;
   float r = length(cv) / 0.7071;
-  vec2 off = cv * r * (0.8 / uRes);                          // chromatic aberration, 0.8 px at the corners
+  vec2 off = cv * r * r * (0.6 / uRes);                      // chromatic aberration, 0.6 px, corners only
   vec3 col = fetchScene(uv);
   float fr = smoothstep(0.3, 1.0, r);                         // fringe only toward the edges: one AA pass, two cheap taps
   col.r = mix(col.r, texture(tScene, uv + off).r, fr);
