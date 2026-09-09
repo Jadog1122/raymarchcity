@@ -449,7 +449,7 @@ vec3 neonGlow(vec3 ro, vec3 rd, float tmax){
       acc += neonCol * (atan((tmax + b) / hh) - atan(b / hh)) / hh;
     }
   }
-  return acc * 0.0035 * (0.5 + uMood.x);                    // more rain, more haze
+  return acc * 0.0025 * (0.5 + uMood.x);                    // more rain, more haze
 }
 
 // Signature move: on every beat a ring expands from the camera at 40 u/s; windows it passes flare x2.5 for 0.4 s, then fade.
@@ -542,7 +542,7 @@ vec3 windowLight(vec3 p, vec3 n, vec3 rd, float t, out float leak, out float fac
       vec3 neonCol = hash21(id + 71.0) < 0.55 ? vec3(1.0, 0.15, 0.55) : vec3(0.15, 0.85, 1.0);
       float flick = 0.85 + 0.15*step(0.5, hash21(vec2(floor(iTime*13.0), id.x + id.y)));     // cheap tube flicker
       emit += neonCol * 3.5 * strip * flick;
-      leak += 0.9 * strip;
+      leak += 0.5 * strip;
       neonSpill += neonCol * strip;
     }
   }
@@ -588,7 +588,7 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float t, int mat, bool cheap){
   vec3 col = alb * (keyCol*dif + skyAmb) * mix(0.15, 1.0, ao);
   col += alb * lampLight(p, n);
   if (mat == 2) col += carLights(p) * 0.03;
-  col += alb * neonLight(p, n) * 2.0;                                          // coloured haze/light from nearby neon on street and walls
+  col += alb * neonLight(p, n) * 1.2;                                          // coloured haze/light from nearby neon on street and walls
   if (mat != 2) col += vec3(1.0, 0.70, 0.42) * 0.015 * ringBoost(p, 0.0);
   col += alb * vec3(0.9, 0.72, 0.52) * 0.02 * (0.55 + 0.45*n.y) * smoothstep(80.0, 0.0, p.y);   // city glow: the sky itself is a warm, dim light source
   float bm = beamAt(p);
@@ -966,6 +966,7 @@ const V = { cross: (a, b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1
 const sstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t*t*(3 - 2*t); };
 const RIG_MIN = [7, 8, 7, 6], RIG_MAX = 12;
 let rig = TEST ? parseInt(params.get('rig') ?? '1') : 1, shotStart = 0, cutFrames = 0;
+Object.defineProperty(window, "__rig", { get: () => rig });
 function lookAt(ro, target, focal, roll){
   const fw = V.norm([target[0]-ro[0], target[1]-ro[1], target[2]-ro[2]]);
   let rt = V.norm(V.cross(fw, [0, 1, 0])); let up = V.cross(rt, fw);
