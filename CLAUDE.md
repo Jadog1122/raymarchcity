@@ -15,7 +15,7 @@
 - `?test=1`：iTime 固定 8.0，camz 默认 44（峡谷段），音频 uniforms 用 sin(t) 合成，整数哈希保证跨加载一致，不请求麦克风。可加 &beat= &search= &flash= &camz= &noaa=1 &rec=N。
 - 等 3 秒读 `window.__stats`（fps/frameMs/shaderError/renderScale/rt 尺寸/DPR/GPU），截图 `shots/latest.png` + `shots/M<n>-<hhmm>.png`。
 - 通过：shaderError 空；fps ≥ 50；非黑像素 > 40%；品红 < 0.1%；最暗 5% 像素亮度均值 < 0.03（必须有真正的黑）；最亮 0.5% 像素亮度均值 > 0.9（M8 起，光少而准）；暖色像素 ≤12%；flicker（0.02 位移两帧差）≤1.2%；亮度重心偏离中心 ≥3%；亮斑连通区 ≤90；录屏 5 秒帧数 ≥ 140。任一不过 exit 1。基准帧 camz=44。
-- verify 保证不坏，不保证好看：每步 verify 后必须用眼睛看截图，并对照艺术方向的两句话（两种颜色、中间全是黑）。
+- verify 保证不坏，不保证好看：每步 verify 后必须用眼睛看截图，并对照艺术方向：阴影深青蓝、光钨丝暖黄、中间全黑；唯一例外是霓虹街区（品红/青两色，只在 hash<0.18 的街区）。
 - verify 不过 = 未完成。不说"应该可以"，给截图和 `__stats` 数字。
 
 ## 问题日志
