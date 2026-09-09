@@ -51,6 +51,7 @@
   <div class="row"><label>相机速度</label><input type="range" id="sSpeed" min="0" max="2" step="0.05" value="1"><span class="v" id="vSpeed">1.00</span></div>
   <div class="row"><label>雾</label><input type="range" id="sFog" min="0" max="2" step="0.05" value="1"><span class="v" id="vFog">1.00</span></div>
   <div class="row"><label>beat 阈值</label><input type="range" id="sBeat" min="1.1" max="2.5" step="0.05" value="1.4"><span class="v" id="vBeat">1.40</span></div>
+  <div class="row"><label>歌名</label><input type="text" id="songName" placeholder="NIGHT CITY" style="flex:1;background:rgba(0,0,0,.3);border:1px solid rgba(207,211,216,.25);color:#cfd3d8;padding:3px 6px;font:12px inherit"></div>
   <div class="row"><label><input type="checkbox" id="fps24"> 24 fps 录制</label></div>
   <div class="stat" id="statLine">fps – · scale 0.75</div>
   <div class="keys">F 全屏 · S 存帧 · H 隐藏 · R 录 30s</div>
@@ -79,6 +80,7 @@ uniform float uSearch;       // searchlight azimuth (integrated in JS)
 uniform vec2  uBeatAge;      // seconds since the last two beats (99 = none)
 uniform float uFlashAge;     // seconds since the last lightning (rare: every 8th beat or an energy peak)
 uniform vec4  uMood;         // rain, quiet(0..1 slow energy), beam strength at the camera, fade
+uniform vec2  uSection;      // section id (0 verse, 1 build, 2 drop, 3 breakdown), seconds in it
 uniform float uPath;         // 1 = grid-walk tracer, 0 = reference sphere-trace
 uniform vec3  uCamRo, uCamRt, uCamUp, uCamFw;
 uniform float uFocal;
@@ -819,13 +821,15 @@ const uniforms = {
   uMood:       { value: new THREE.Vector4(0.5, 1, 0, 1) },
   uPath:       { value: params.get('path') === '0' ? 0 : 1 },
   uCamRo: { value: new THREE.Vector3() }, uCamRt: { value: new THREE.Vector3() }, uCamUp: { value: new THREE.Vector3() }, uCamFw: { value: new THREE.Vector3() },
-  uFocal: { value: 1.7 }, uJitter: { value: new THREE.Vector2() }
+  uFocal: { value: 1.7 }, uJitter: { value: new THREE.Vector2() },
+  uSection: { value: new THREE.Vector2(0, 0) }
 };
 const beatTimes = [-99, -99];
 let beatCount = 0, flashTime = -99, slowEnergy = 0.5, dropTime = -99;
 const energyHist = [];   // [t, energy] for the last 4 s
 let fadeInAt = -99, fadeOutAt = 1e9;           // seconds (page time)
 const titleEl = document.getElementById('title');
+function setTitle(s){ titleEl.textContent = s || 'NIGHT CITY'; const f = document.getElementById('songName'); if (f) f.value = titleEl.textContent; }
 function cueOpening(t){ fadeInAt = t; fadeOutAt = 1e9; setTimeout(() => titleEl.style.opacity = 1, 1000); setTimeout(() => titleEl.style.opacity = 0, 5000); }
 let searchAngle = -1.75;
 const ctl = { response: 1, fog: 1, speed: 1 };
@@ -934,7 +938,8 @@ const audio = {
   max:  { bass: 1e-3, mid: 1e-3, high: 1e-3, energy: 1e-3 },
   val:  { bass: 0, mid: 0, high: 0, energy: 0 },
   beat: 0, beatThreshold: 1.4, lastBeat: -1e9, bassHist: [], bassHistT: [],
-  bins: null
+  bins: null,
+  prevMag: null, flux: [], bpm: 0, bpmConf: 0, period: 0.5, section: 0, sectionAge: 0, sectionSince: 0, energy8: 0
 };
 window.__audio = audio;
 
@@ -988,6 +993,9 @@ async function useFile(file){
   audio.analyser.connect(audio.ctx.destination);
   await player.play();
   audio.kind = 'file'; srcName.textContent = file.name; markSrc();
+  const guess = file.name.replace(/\.[^.]+$/, '');
+  const name = window.prompt('歌名（显示在左下角）', guess);
+  setTitle(name === null ? guess : name);
 }
 function markSrc(){ btnMic.classList.toggle('on', audio.kind === 'mic'); btnFile.classList.toggle('on', audio.kind === 'file'); }
 
@@ -999,11 +1007,27 @@ function liveAudio(dt, nowSec){
   rms = Math.sqrt(rms / audio.time.length);
   const raw = audio.raw;
   raw.bass = bandAmp(audio.bins.bass); raw.mid = bandAmp(audio.bins.mid); raw.high = bandAmp(audio.bins.high); raw.energy = rms;
+  // spectral flux (onset strength) -> tempo by autocorrelation over the last 8 s -> beat grid
+  { const N = 200; if (!audio.prevMag) audio.prevMag = new Float32Array(N);
+    let fx = 0; for (let i = 1; i < N; i++){ const m = Math.pow(10, audio.freq[i] / 20); const d = m - audio.prevMag[i]; if (d > 0) fx += d; audio.prevMag[i] = m; }
+    audio.flux.push([nowSec, fx]); while (audio.flux.length && nowSec - audio.flux[0][0] > 8) audio.flux.shift();
+    if (audio.flux.length > 120 && (audio.flux.length % 30) === 0){          // every ~0.5 s: resample at 50 Hz and autocorrelate
+      const t0f = audio.flux[0][0], span = nowSec - t0f, n = Math.floor(span * 50), env = new Float32Array(n); let k = 0;
+      for (let i = 0; i < n; i++){ const tt = t0f + i / 50; while (k < audio.flux.length - 1 && audio.flux[k + 1][0] <= tt) k++; env[i] = audio.flux[k][1]; }
+      let mean = 0; for (const v of env) mean += v; mean /= n; for (let i = 0; i < n; i++) env[i] -= mean;
+      let best = 0, bestLag = 0, e0 = 1e-9; for (let i = 0; i < n; i++) e0 += env[i]*env[i];
+      for (let lag = 15; lag <= 50; lag++){ let c = 0; for (let i = lag; i < n; i++) c += env[i]*env[i - lag]; c /= e0; if (c > best){ best = c; bestLag = lag; } }
+      if (bestLag){ const bpm = 60 * 50 / bestLag; audio.bpm = audio.bpm ? audio.bpm*0.7 + bpm*0.3 : bpm; audio.period = 60 / audio.bpm; audio.bpmConf = best; }
+    }
+  }
   // beat: raw bass vs its 1 s sliding mean
   audio.bassHist.push(raw.bass); audio.bassHistT.push(nowSec);
   while (audio.bassHistT.length && nowSec - audio.bassHistT[0] > 1.0){ audio.bassHist.shift(); audio.bassHistT.shift(); }
   const mean = audio.bassHist.reduce((a, b) => a + b, 0) / audio.bassHist.length;
-  if (raw.bass > audio.beatThreshold*mean && raw.bass > 1e-4 && nowSec - audio.lastBeat > 0.2){ audio.beat = 1; audio.lastBeat = nowSec; beatTimes.unshift(nowSec); beatTimes.length = 2;
+  if (raw.bass > audio.beatThreshold*mean && raw.bass > 1e-4 && nowSec - audio.lastBeat > 0.2){
+    let bt = nowSec;
+    if (audio.bpmConf > 0.35 && beatTimes[0] > 0){ const k = Math.round((nowSec - beatTimes[0]) / audio.period); const pred = beatTimes[0] + k*audio.period; if (k >= 1 && Math.abs(pred - nowSec) < 0.08) bt = pred; }   // phase-lock to the tempo grid
+    audio.beat = 1; audio.lastBeat = bt; beatTimes.unshift(bt); beatTimes.length = 2;
     beatCount++;
     // phrase level: a 'drop' = energy of the last second clearly above the 3 s before it, on a beat
     let r = 0, rn = 0, pv = 0, pn = 0;
@@ -1014,6 +1038,13 @@ function liveAudio(dt, nowSec){
   }
   energyHist.push([nowSec, audio.val.energy]);
   while (energyHist.length && nowSec - energyHist[0][0] > 4.0) energyHist.shift();
+  // sections: 0 verse, 1 build (rising), 2 drop (loud, after a drop), 3 breakdown (quiet); min 4 s per state
+  { let e8 = 0; for (const [, e] of energyHist) e8 += e; e8 /= Math.max(1, energyHist.length); audio.energy8 = e8;
+    let r = 0, rn = 0, pv = 0, pn = 0; for (const [tt, e] of energyHist){ if (nowSec - tt < 1.5){ r += e; rn++; } else { pv += e; pn++; } }
+    const rising = rn && pn && (r/rn) > (pv/pn)*1.15;
+    let want = e8 < 0.3 ? 3 : (nowSec - dropTime < 8 ? 2 : (rising && e8 > 0.4 ? 1 : 0));
+    if (want !== audio.section && nowSec - audio.sectionSince > 4){ audio.section = want; audio.sectionSince = nowSec; }
+    audio.sectionAge = nowSec - audio.sectionSince; }
   audio.beat *= Math.exp(-8*dt);
   // adaptive gain (sliding max with slow decay) + asymmetric smoothing
   for (const k of ['bass', 'mid', 'high', 'energy']){
@@ -1086,6 +1117,7 @@ else {
   bind('sSpeed', 'vSpeed', x => ctl.speed = x);
   bind('sFog', 'vFog', x => ctl.fog = x);
   bind('sBeat', 'vBeat', x => audio.beatThreshold = x);
+  document.getElementById('songName').addEventListener('input', e => setTitle(e.target.value));
   window.addEventListener('keydown', e => {
     if (e.target.tagName === 'INPUT' && e.target.type !== 'range') return;
     const k = e.key.toLowerCase();
@@ -1194,6 +1226,7 @@ function frame(now){
   uniforms.uMood.value.x = rainEnv;
   slowEnergy += ((a.energy) - slowEnergy) * (dt/1000) / 3.0;   // ~3 s follower
   uniforms.uMood.value.y = TEST ? 1 : Math.min(1, Math.max(0, slowEnergy*1.6));
+  uniforms.uSection.value.set(TEST ? parseFloat(params.get('section') ?? '0') : audio.section, TEST ? 5 : audio.sectionAge);
 
   renderFrame(now);
 
@@ -1203,7 +1236,7 @@ function frame(now){
     stats.frameMs = +(msAcc / fpsCount).toFixed(2);
     fpsCount = 0; msAcc = 0; fpsT = now;
     adaptScale(stats.fps);
-    statLine.textContent = `fps ${stats.fps} · scale ${renderScale.toFixed(2)} · ${stats.rtW}x${stats.rtH}`;
+    statLine.textContent = `fps ${stats.fps} · scale ${renderScale.toFixed(2)} · ${stats.rtW}x${stats.rtH}` + (audio.bpm ? ` · ${audio.bpm.toFixed(0)} bpm · S${audio.section}` : '');
   }
 }
 requestAnimationFrame(frame);
