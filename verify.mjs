@@ -101,6 +101,18 @@ for (let i = 0; i < png.w * png.h; i++) {
   if (Math.abs(la - lb) > 51) flick++;
 }
 const flickerPct = 100 * flick / (png.w * png.h);
+// composition: brightness-weighted centroid offset from the centre (% of width), and count of highlight blobs (luma > 0.8, 1/8 res)
+let cx = 0, cy = 0, cw = 0; const W8 = Math.floor(png.w / 8), H8 = Math.floor(png.h / 8); const grid = new Uint8Array(W8 * H8);
+for (let y = 0; y < png.h; y++) for (let x = 0; x < png.w; x++) {
+  const o = (y * png.w + x) * png.bpp, l = (0.2126*png.data[o] + 0.7152*png.data[o+1] + 0.0722*png.data[o+2]) / 255;
+  if (l > 0.5) { cx += x * l; cy += y * l; cw += l; }
+  if (l > 0.8) grid[Math.floor(y / 8) * W8 + Math.floor(x / 8)] = 1;
+}
+const centroidPct = cw > 0 ? 100 * Math.hypot(cx / cw - png.w / 2, cy / cw - png.h / 2) / png.w : 0;
+let blobs = 0; const seen = new Uint8Array(W8 * H8);
+for (let i = 0; i < W8 * H8; i++) if (grid[i] && !seen[i]) { blobs++; const st = [i]; seen[i] = 1;
+  while (st.length) { const k = st.pop(), kx = k % W8, ky = (k / W8) | 0;
+    for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) { const nx = kx + dx, ny = ky + dy; if (nx < 0 || ny < 0 || nx >= W8 || ny >= H8) continue; const j = ny * W8 + nx; if (grid[j] && !seen[j]) { seen[j] = 1; st.push(j); } } } }
 let nonBlack = 0, magenta = 0, warm = 0; const n = png.w * png.h;
 const hist = new Float64Array(256);
 for (let i = 0; i < n; i++) {
@@ -124,7 +136,7 @@ const dark5 = tailMean(true, 0.05), bright1 = tailMean(false, BRIGHT_FRAC);
 
 // ---------- report ----------
 console.log('stats:', JSON.stringify(stats));
-console.log(`png: ${png.w}x${png.h}  nonBlack=${nonBlackPct.toFixed(1)}%  magenta=${magentaPct.toFixed(3)}%  dark5=${dark5.toFixed(3)}  bright1=${bright1.toFixed(3)}  warm=${warmPct.toFixed(1)}%  flicker=${flickerPct.toFixed(2)}%`);
+console.log(`png: ${png.w}x${png.h}  nonBlack=${nonBlackPct.toFixed(1)}%  magenta=${magentaPct.toFixed(3)}%  dark5=${dark5.toFixed(3)}  bright1=${bright1.toFixed(3)}  warm=${warmPct.toFixed(1)}%  flicker=${flickerPct.toFixed(2)}%  centroid=${centroidPct.toFixed(1)}%  blobs=${blobs}`);
 if (errors.length) console.log('console errors:\n  ' + errors.slice(0, 5).join('\n  '));
 
 const fails = [];
