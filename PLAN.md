@@ -59,6 +59,19 @@ commit `M4: perf + panel`。→ CP4
 subagent 审阅（配色/光影/动态各 ≤3 条），修影响最大 3 条。R 键 MediaRecorder 30 秒 webm 8Mbps。
 commit `M5: polish after review`。→ CP5
 
+## M6 · Look-dev（开始 20:14）
+方向：雨夜胶片。阴影深青蓝 #0B1622，光钨丝暖黄 #FFB36B，中间全黑。签名动作：beat 光圈从相机扩散点亮窗户。
+方案：
+- 后期：场景 pass 输出线性 HDR 到 HalfFloat RT（alpha 存深度 t/MAXD）；post shader 一个文本两个模式：mode0 亮部提取到半分辨率 RT（开 mipmap 当 4 级降采样），mode1 合成：ACES → bloom（4 级 mip 各 9-tap tent）→ anamorphic（lod 2.5 水平 17 tap，冷蓝）→ 色散 1.5px → 颗粒 → 暗角 → 2.39 黑边。
+- 调色：天空/雾/楼面全部青蓝族，去掉街面暖色上射光，唯一暖色是窗户 + 泄光。
+- 窗户：每楼 hash 选窗型；亮度四档按簇 hash；3x3 邻窗泄光染墙；竖直分布中层最密。
+- 轮廓：h>0.95 退台 3 级 + 天线 + 红灯 1Hz；20% 楼顶水箱簇；mod(id.z,7)==3 整行空（河）；地标塔固定在相机前方 140 单位偏右 12，高 90。
+- 空气：探照灯从塔顶，JS 积分角度（bass 调速），12 步体积采样只算它；雨在 post 屏幕空间；地面反射法线加涟漪；post 里按深度 2px 远景模糊。
+- 相机：高 1.5，朝塔略偏，12 秒一次 3° 抬头 easeInOut，横滚 ±0.5°。
+- 音频：uBeatAge（最近两次 beat 的年龄）→ 光圈 + 0.1s 闪电；bass → bloom 阈值 + 探照灯转速；high → 雨；energy → 速度。删 bass 楼高 / beat FOV / mid 雾。
+- test 模式 URL 参数：t、beat（年龄）、search（角度）用于三张 CP6 截图；rec=N 录 N 秒。
+- ffprobe 不在 PATH，用 playwright 自带 ~/Library/Caches/ms-playwright/ffmpeg-1011/ffmpeg-mac 数帧。
+
 ## 决策记录
 - 2026-09-08 19:08 M1：第一版曝光像白天（albedo 0.24、key 0.85、雾 0.032 都按白天量级给的）。改为夜景量级：albedo 0.13、key 0.6×、雾 0.011、天空地平线 0.11。规则：夜景场景所有线性量从 0.1 量级起步。
 - three.js 锁 0.170.0（jsdelivr）。RawShaderMaterial + GLSL3，自己声明 precision/out。

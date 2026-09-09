@@ -65,16 +65,26 @@ function decodePNG(buf) {
 }
 const png = decodePNG(fs.readFileSync('shots/latest.png'));
 let nonBlack = 0, magenta = 0; const n = png.w * png.h;
+const hist = new Float64Array(256);
 for (let i = 0; i < n; i++) {
   const r = png.data[i * png.bpp], g = png.data[i * png.bpp + 1], b = png.data[i * png.bpp + 2];
   if (Math.max(r, g, b) > 12) nonBlack++;
   if (r > 200 && g < 60 && b > 200) magenta++;
+  hist[Math.round(0.2126*r + 0.7152*g + 0.0722*b)]++;
 }
 const nonBlackPct = 100 * nonBlack / n, magentaPct = 100 * magenta / n;
+// luminance percentiles: mean of darkest 5 % and brightest 1 %
+function tailMean(fromDark, frac){
+  let need = n * frac, sum = 0, cnt = 0;
+  for (let k = 0; k < 256; k++){ const bin = fromDark ? k : 255 - k; const take = Math.min(hist[bin], need - cnt);
+    sum += take * bin; cnt += take; if (cnt >= need) break; }
+  return sum / cnt / 255;
+}
+const dark5 = tailMean(true, 0.05), bright1 = tailMean(false, 0.01);
 
 // ---------- report ----------
 console.log('stats:', JSON.stringify(stats));
-console.log(`png: ${png.w}x${png.h}  nonBlack=${nonBlackPct.toFixed(1)}%  magenta=${magentaPct.toFixed(3)}%`);
+console.log(`png: ${png.w}x${png.h}  nonBlack=${nonBlackPct.toFixed(1)}%  magenta=${magentaPct.toFixed(3)}%  dark5=${dark5.toFixed(3)}  bright1=${bright1.toFixed(3)}`);
 if (errors.length) console.log('console errors:\n  ' + errors.slice(0, 5).join('\n  '));
 
 const fails = [];
@@ -82,6 +92,8 @@ if (stats.shaderError) fails.push('shaderError: ' + stats.shaderError.slice(0, 3
 if (!(stats.fps >= 50)) fails.push(`fps ${stats.fps} < 50`);
 if (!(nonBlackPct > 40)) fails.push(`nonBlack ${nonBlackPct.toFixed(1)}% <= 40%`);
 if (!(magentaPct < 0.1)) fails.push(`magenta ${magentaPct.toFixed(3)}% >= 0.1%`);
+if (!(dark5 < 0.03)) fails.push(`dark5 ${dark5.toFixed(3)} >= 0.03 (no true blacks)`);
+if (!(bright1 > 0.9)) fails.push(`bright1 ${bright1.toFixed(3)} <= 0.9 (no highlights)`);
 if (errors.some(e => /pageerror|SHADER ERROR/.test(e))) fails.push('page/shader errors in console');
 if (fails.length) { console.log('VERIFY FAIL\n  - ' + fails.join('\n  - ')); process.exit(1); }
 console.log('VERIFY PASS  -> shots/latest.png');

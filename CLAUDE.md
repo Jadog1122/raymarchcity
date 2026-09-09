@@ -3,7 +3,7 @@
 ## 硬约束
 - 产物只有 `index.html`（内联 GLSL）。`verify.mjs` / `PLAN.md` / `RETRO.md` / `HANDOFF.md` 是开发文件。
 - 除 three.js importmap CDN（锁定版本号）外零外部依赖；最终产物 `file://` 双击可开。
-- 所有画面在一个 fragment shader 里；three.js 只做全屏 quad + uniforms，相机在 shader 里算，不用 OrbitControls。
+- 场景在一个 fragment shader 里，M6 起允许第二个全屏后期 pass（bloom 降采样）；两个 shader 都内联在 index.html。three.js 只做全屏 quad + uniforms，相机在 shader 里算，不用 OrbitControls。
 - fps 上限 60；页面失焦暂停渲染。
 - 音频初始化全部在用户手势事件里（AudioContext autoplay 限制）。
 - shader 中任何 NaN 输出纯品红 `#FF00FF`。
@@ -14,7 +14,8 @@
 - `npm run verify` = `node verify.mjs`：有头 chromium，deviceScaleFactor 2，窗口 1720x720，打开 `index.html?test=1`。
 - `?test=1`：iTime 固定 8.0，音频 uniforms 用 sin(t) 合成，随机种子固定，不请求麦克风。
 - 等 3 秒读 `window.__stats`（fps/frameMs/shaderError/renderScale/rt 尺寸/DPR/GPU），截图 `shots/latest.png` + `shots/M<n>-<hhmm>.png`。
-- 通过：shaderError 空；fps ≥ 50；非黑像素 > 40%；品红 < 0.1%。任一不过 exit 1。
+- 通过：shaderError 空；fps ≥ 50；非黑像素 > 40%；品红 < 0.1%；最暗 5% 像素亮度均值 < 0.03（必须有真正的黑）；最亮 1% 像素亮度均值 > 0.9（必须有高光）；录屏 5 秒帧数 ≥ 140。任一不过 exit 1。
+- verify 保证不坏，不保证好看：每步 verify 后必须用眼睛看截图，并对照艺术方向的两句话（两种颜色、中间全是黑）。
 - verify 不过 = 未完成。不说"应该可以"，给截图和 `__stats` 数字。
 
 ## 问题日志
