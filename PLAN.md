@@ -59,7 +59,7 @@ commit `M4: perf + panel`。→ CP4
 subagent 审阅（配色/光影/动态各 ≤3 条），修影响最大 3 条。R 键 MediaRecorder 30 秒 webm 8Mbps。
 commit `M5: polish after review`。→ CP5
 
-## M6 · Look-dev（开始 20:14）
+## M6 · Look-dev（开始 20:14） ✅ 8 步全部完成，实际约 60 分钟（20:14–00:15，含一次中断）
 方向：雨夜胶片。阴影深青蓝 #0B1622，光钨丝暖黄 #FFB36B，中间全黑。签名动作：beat 光圈从相机扩散点亮窗户。
 方案：
 - 后期：场景 pass 输出线性 HDR 到 HalfFloat RT（alpha 存深度 t/MAXD）；post shader 一个文本两个模式：mode0 亮部提取到半分辨率 RT（开 mipmap 当 4 级降采样），mode1 合成：ACES → bloom（4 级 mip 各 9-tap tent）→ anamorphic（lod 2.5 水平 17 tap，冷蓝）→ 色散 1.5px → 颗粒 → 暗角 → 2.39 黑边。
@@ -71,6 +71,17 @@ commit `M5: polish after review`。→ CP5
 - 音频：uBeatAge（最近两次 beat 的年龄）→ 光圈 + 0.1s 闪电；bass → bloom 阈值 + 探照灯转速；high → 雨；energy → 速度。删 bass 楼高 / beat FOV / mid 雾。
 - test 模式 URL 参数：t、beat（年龄）、search（角度）用于三张 CP6 截图；rec=N 录 N 秒。
 - ffprobe 不在 PATH，用 playwright 自带 ~/Library/Caches/ms-playwright/ffmpeg-1011/ffmpeg-mac 数帧。
+
+M6 决策：
+- 后期分两个 pass 但仍是一个 post shader（uMode 0/1）；bloom 用半分辨率 RT 的 mip 链当 4 级降采样，每级 9-tap tent。
+- 暗角放在线性空间 tonemap 之前：否则和 bright1 / dark5 两条指标互相打架（暗角压高光又抬不了黑）。
+- black crush 0.012（display 空间）：ACES 脚趾 + gamma 会把线性 0.004 抬到 sRGB 0.045，光靠压环境光到不了 dark5<0.03。
+- 窗户：任务书的 30/50/15/5 分布保留，但"暗黄"档取 0.10（0.35 经 ACES 仍像亮窗），加每楼 0.4–0.9 入住率，否则整墙白格子。
+- 地标塔跟随相机（永远在前方 200），MAXD 320；探照灯下倾 35.5°，光柱能落进街道；体积采样集中在视线离光轴最近处 ±26 单位内 10 步 + 每步 1 次朝光源遮挡采样。
+- 性能：map() 里屋顶结构和退台只在 p.y 高于相应高度时才算；塔先算包围盒；march 100 步、反射 20 步、AO 4 步 → fps 58–60。
+- 光圈：环带内亮窗 ×2.5（任务书），另外点亮 45% 的暗窗到 1.2 并给墙面 0.015 暖洗，否则截图里看不出来；第一版点亮全部候选窗变成白格子，收回。
+- 录屏帧数校验不用 ffmpeg（playwright 自带的是精简版），用 Chrome 回放读 totalVideoFrames；录制前关掉第一个窗口并热身 1.5 s，132 帧 → 149 帧。
+- test 模式参数：`&beat=<age>`（光圈年龄秒）、`&search=<rad>`（探照灯方位）、`&rec=<s>`；verify 环境变量 EXTRA / OUT / NOREC。
 
 ## 决策记录
 - 2026-09-08 19:08 M1：第一版曝光像白天（albedo 0.24、key 0.85、雾 0.032 都按白天量级给的）。改为夜景量级：albedo 0.13、key 0.6×、雾 0.011、天空地平线 0.11。规则：夜景场景所有线性量从 0.1 量级起步。
