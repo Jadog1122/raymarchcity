@@ -276,12 +276,12 @@ vec3 skyColor(vec3 rd){
 }
 
 // Signature move: on every beat a ring expands from the camera at 40 u/s; windows it passes flare x2.5 for 0.4 s, then fade.
-float ringBoost(vec3 p){
+float ringBoost(vec3 p, float j){                                   // j: per-window jitter 0..1 (delay + decay rate)
   float dist = length(p.xz - vec2(0.0, uCamZ));
   float best = 0.0;
   for (int k = 0; k < 2; k++){
-    float f = (k == 0 ? uBeatAge.x : uBeatAge.y) - dist / 40.0;     // time since the ring passed this point
-    float b = f < 0.0 ? 0.0 : (f < 0.4 ? 1.0 : exp(-(f - 0.4)*6.0));
+    float f = (k == 0 ? uBeatAge.x : uBeatAge.y) - dist / 40.0 - 0.15*j;   // time since the ring passed this window
+    float b = f < 0.0 ? 0.0 : (f < 0.4 ? 1.0 : exp(-(f - 0.4)*(4.0 + 4.0*j)));
     b *= smoothstep(-0.06, 0.02, f);                                  // soft leading edge
     best = max(best, b);
   }
@@ -306,7 +306,7 @@ vec3 windowLight(vec3 p, vec3 n, float t, out float leak, out float facade){
   vec2 c = floor(g), f = fract(g);
   float fy = clamp(p.y / max(ht, 1.0), 0.0, 1.0);
   float prof = smoothstep(0.0, 0.22, fy) * (1.0 - smoothstep(0.72, 1.0, fy));   // ground + top floors mostly dark
-  float gRing = ringBoost(p);
+  float gRing = ringBoost(p, 0.0);
   float occ = 0.4 + 0.5*hash21(id + 77.7);                                       // per-building occupancy
   vec3 emit = vec3(0.0);
   for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++){
@@ -317,7 +317,9 @@ vec3 windowLight(vec3 p, vec3 n, float t, out float leak, out float facade){
     float b  = v < 0.30 ? 0.0 : (v < 0.70 ? 0.10 : (v < 0.90 ? 3.0 : 7.0));   // off / dim / bright / near-white
     float elig = step(hash21(cc*2.3 + id + 9.0), prof * occ);
     b *= elig;
-    b = max(b, 1.2 * gRing * step(hash21(cc*1.3 + id + 4.0), prof * 0.45));   // the passing ring lights some dark windows, then they fade
+    float rw = ringBoost(p, hash21(cc*0.71 + id + 1.7));                  // per-window timing: the wave front gets texture
+    b = max(b, 1.2 * rw * step(hash21(cc*1.3 + id + 4.0), prof * 0.45));   // the passing ring lights some dark windows, then they fade
+    b *= 1.0 + 1.5*rw;
     vec2 d = f - vec2(float(i), float(j)) - 0.5;                   // pixel -> neighbour window centre, cell units
     if (i == 0 && j == 0){
       vec2 rect = smoothstep(0.04, 0.0, abs(d) - vec2(0.25, 0.30));
@@ -334,8 +336,8 @@ vec3 windowLight(vec3 p, vec3 n, float t, out float leak, out float facade){
   float parapet = 1.0 + 0.6*smoothstep(0.7, 0.0, ht - p.y);
   facade = mix(mix(0.5, 1.0, slab*mull) * parapet, 0.9, lod);
   float ring = 1.0 + 1.5*gRing;
-  leak = mix(leak * 0.22, 0.04 * prof * occ, lod) * ring;
-  return mix(emit, vec3(1.0, 0.76, 0.52) * 0.10 * prof * occ, lod) * 2.2 * ring;
+  leak = mix(leak * 0.22, 0.04 * prof * occ * ring, lod);
+  return mix(emit, vec3(1.0, 0.76, 0.52) * 0.10 * prof * occ * ring, lod) * 2.2;
 }
 
 vec3 shade(vec3 p, vec3 n, vec3 rd, float t, int mat, bool cheap){
@@ -359,7 +361,7 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float t, int mat, bool cheap){
   float ao = cheap ? 0.8 : calcAO(p, n);
   vec3 col = alb * (keyCol*dif + skyAmb) * mix(0.15, 1.0, ao);
   col += alb * lampLight(p, n);
-  if (mat != 2) col += vec3(1.0, 0.70, 0.42) * 0.015 * ringBoost(p);
+  if (mat != 2) col += vec3(1.0, 0.70, 0.42) * 0.015 * ringBoost(p, 0.0);
   float bm = beamAt(p);
   if (bm > 0.001){ vec3 toL = normalize(searchOrigin() - p); col += alb * vec3(0.55, 0.72, 1.0) * 6.0 * bm * max(dot(n, toL), 0.0); }
   col += alb * vec3(1.0, 0.70, 0.42) * leak * 1.8;                           // warm spill on the wall next to lit windows
