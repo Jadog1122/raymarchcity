@@ -110,7 +110,8 @@ float map(vec3 p){
   vec2 q  = p.xz - (id + 0.5)*CELL;
   float d = 1e5;
   int mat = 1;
-  bool river = mod(id.y, 7.0) == 3.0;                          // one empty row every 7 blocks: water, only reflections
+  float rowm = mod(id.y, 7.0);
+  bool river = rowm == 3.0 || rowm == 4.0;                      // two empty rows every 7 blocks: water, only reflections
   if (!river){
     // sidewalk slab (kerb 0.12 high) and street lamps on both sides of every N-S street
     if (p.y < 0.6){ d = sdBox(vec3(q.x, p.y - 0.06, q.y), vec3(CELL*0.5 - 1.55, 0.06, CELL*0.5 - 1.55)); mat = 2; }
@@ -179,7 +180,7 @@ vec2 raymarch(vec3 ro, vec3 rd){
   for (int i = 0; i < 90; i++){
     vec3 p = ro + rd*t;
     float d = map(p);
-    float eps = 0.001*t + 0.0005;
+    float eps = 0.0015*t + 0.0005;
     if (d < eps) return vec2(t, float(i));
     t += d;
     if (t > MAXD) return vec2(-1.0, float(i));
@@ -196,8 +197,8 @@ vec3 calcNormal(vec3 p){
 
 float calcAO(vec3 p, vec3 n){
   float occ = 0.0, sca = 1.0;
-  for (int i = 0; i < 4; i++){
-    float h = 0.05 + 0.5*float(i)/3.0;
+  for (int i = 0; i < 3; i++){
+    float h = 0.06 + 0.5*float(i)/2.0;
     float d = map(p + n*h);
     occ += (h - d)*sca; sca *= 0.65;
   }
@@ -207,7 +208,7 @@ float calcAO(vec3 p, vec3 n){
 vec3 skyColor(vec3 rd){
   float y = clamp(rd.y, 0.0, 1.0);
   vec3 top = vec3(0.0006, 0.0012, 0.0035);
-  vec3 hor = vec3(0.028, 0.048, 0.075);
+  vec3 hor = vec3(0.024, 0.042, 0.068);
   return mix(hor, top, pow(y, 0.5));
 }
 
@@ -226,7 +227,8 @@ float beamAt(vec3 p){
 // Street lamps: one per block on each side of every N-S street, 3.2 high, tungsten. Nearest four light the scene.
 vec3 lampLight(vec3 p, vec3 n){
   vec2 idc = floor(p.xz / CELL);
-  if (mod(idc.y, 7.0) == 3.0) return vec3(0.0);
+  float rm = mod(idc.y, 7.0);
+  if (rm == 3.0 || rm == 4.0) return vec3(0.0);
   float kx = floor(p.x / CELL + 0.5) * CELL;
   float zc = (idc.y + 0.5) * CELL;
   float zn = p.z > zc ? zc + CELL : zc - CELL;
@@ -245,7 +247,8 @@ vec3 lampGlow(vec3 ro, vec3 rd, float tmax){
   float z0 = (floor(ro.z / CELL) - 1.0 + 0.5) * CELL;
   for (int i = 0; i < 12; i++){
     float z = z0 + float(i >> 1) * CELL;
-    if (mod(floor(z / CELL), 7.0) == 3.0) continue;
+    float rmz = mod(floor(z / CELL), 7.0);
+    if (rmz == 3.0 || rmz == 4.0) continue;
     vec3 lp = vec3(((i & 1) == 0 ? -1.75 : 1.75), 3.1, z);
     vec3 a = ro - lp; float b = dot(rd, a); float c = dot(a, a);
     float h = sqrt(max(c - b*b, 0.04));
@@ -319,7 +322,7 @@ vec3 windowLight(vec3 p, vec3 n, float t, out float leak, out float facade){
 
 vec3 shade(vec3 p, vec3 n, vec3 rd, float t, int mat, bool cheap){
   if (mat == 3) return vec3(1.0, 0.10, 0.06) * 5.0 * blink();        // aviation beacon
-  if (mat == 6) return vec3(1.0, 0.76, 0.50) * 4.0;                   // lamp head
+  if (mat == 6) return vec3(1.0, 0.76, 0.50) * (n.y > 0.3 ? 0.15 : 4.0);   // lamp head: emits sideways/down, dark from above
   vec3 alb = (mat == 2) ? vec3(0.010, 0.012, 0.015) : vec3(0.040, 0.055, 0.075);   // wet asphalt is black; facades deep teal-blue
   if (mat == 5) alb *= 0.8;
   vec3 wEmit = vec3(0.0); float leak = 0.0;
@@ -345,7 +348,7 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float t, int mat, bool cheap){
   col += wEmit;
   float roY = p.y - rd.y*t;
   float midY = max(0.5*(roY + p.y), 0.0);
-  float dens = 0.011 * uParams.y * exp(-0.035*midY);
+  float dens = 0.009 * uParams.y * exp(-0.035*midY);
   float fog = 1.0 - exp(-dens*t);
   vec3 fogCol = skyColor(rd) * vec3(0.85, 1.0, 1.15) * (1.0 + 5.0*flash());  // fog colder than the sky; lightning lifts it
   col = mix(col, vec3(dot(col, vec3(0.3, 0.5, 0.2))), 0.5*fog);              // distance desaturation
@@ -361,10 +364,10 @@ vec3 volumetric(vec3 ro, vec3 rd, float tmax, vec2 frag){
   float tc = abs(den) > 1e-4 ? (b*d2 - d1) / den : 0.5*tmax;      // closest approach along the view ray
   float t0 = clamp(tc - 26.0, 0.0, tmax), t1 = clamp(tc + 26.0, 0.0, tmax);
   if (t1 - t0 < 1.0) return vec3(0.0);
-  float dt = (t1 - t0) / 10.0;
+  float dt = (t1 - t0) / 8.0;
   float t = t0 + dt * hash21(frag);
   float acc = 0.0;
-  for (int i = 0; i < 10; i++){
+  for (int i = 0; i < 8; i++){
     vec3 p = ro + rd*t;
     float bm = beamAt(p);
     if (bm > 0.002){
@@ -395,11 +398,11 @@ vec3 render(vec3 ro, vec3 rd, vec2 uv){
       vec3 rr = reflect(rd, n);
       vec3 rp = p + n*0.02;
       float t2 = 0.0, hit = -1.0;
-      for (int i = 0; i < 16; i++){
+      for (int i = 0; i < 14; i++){
         float d = map(rp + rr*t2);
-        if (d < 0.0012*t2 + 0.001){ hit = t2; break; }
-        t2 += d*0.95;
-        if (t2 > 90.0) break;
+        if (d < 0.002*t2 + 0.001){ hit = t2; break; }
+        t2 += d;
+        if (t2 > 160.0) break;
       }
       vec3 refl = skyColor(rr);
       if (hit > 0.0){
@@ -423,10 +426,14 @@ void main(){
   // low, slow dolly down the street, aimed a little toward the landmark; every 12 s a 3 deg tilt up and back
   float ph = fract(iTime / 12.0);
   float e  = ph < 0.5 ? ph*2.0 : 2.0 - ph*2.0;  e = e*e*(3.0 - 2.0*e);
-  float pitch = radians(3.0 + 3.0*e);
-  float yaw   = radians(2.5);
+  // narrative keyframes on the river period (56): canyon low -> rise and turn to the landmark over the water -> settle
+  float u = mod(uCamZ - 32.0 + 28.0, 56.0) - 28.0;       // distance to the river centre line (z = 56k+32), -28..28
+  float rise = smoothstep(-26.0, -14.0, u) * (1.0 - smoothstep(-6.0, 8.0, u));
+  rise = rise*rise*(3.0 - 2.0*rise);
+  float pitch = radians(3.0 + 3.0*e + 4.0*rise);
+  float yaw   = radians(2.5 + 4.0*rise);
   float roll  = radians(0.5) * sin(iTime*0.35);
-  vec3 ro = vec3(0.0, 1.5, uCamZ);
+  vec3 ro = vec3(0.0, 1.5 + 2.5*rise, uCamZ);
   vec3 fw = normalize(vec3(sin(yaw)*cos(pitch), sin(pitch), cos(yaw)*cos(pitch)));
   vec3 rt = normalize(cross(fw, vec3(0.0, 1.0, 0.0)));
   vec3 up = cross(rt, fw);
@@ -522,7 +529,7 @@ void main(){
   col *= 1.0 - 0.55 * pow(r, 2.2);
   col = aces(col * uExposure);
   col = pow(col, vec3(1.0/2.2));
-  col = max(col - 0.012, 0.0) / (1.0 - 0.012);                 // crush the blacks (film toe)
+  col = max(col - 0.018, 0.0) / (1.0 - 0.018);                 // crush the blacks (film toe)
   // grain: per frame, stronger in the shadows
   float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
   float g = hash21(gl_FragCoord.xy + vec2(uFrame*7.31, uFrame*3.17)) - 0.5;
