@@ -408,7 +408,8 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float t, int mat, bool cheap){
   col += wEmit;
   float roY = p.y - rd.y*t;
   float midY = max(0.5*(roY + p.y), 0.0);
-  float dens = 0.009 * uParams.y * exp(-0.06*midY);
+  float bank = 0.55 + 0.9*vnoise((p.xz + vec2(iTime*0.6, iTime*0.25)) * 0.025);   // drifting fog banks between the blocks
+  float dens = 0.009 * uParams.y * bank * exp(-0.06*midY);
   float fog = 1.0 - exp(-dens*t);
   vec3 fogCol = skyBase(rd) * vec3(0.75, 0.95, 1.2) * (1.0 + 5.0*flash());  // fog colder than the sky; lightning lifts it
   col = mix(col, vec3(dot(col, vec3(0.3, 0.5, 0.2))), 0.5*fog);              // distance desaturation
@@ -460,7 +461,7 @@ vec3 render(vec3 ro, vec3 rd, vec2 uv){
         nr.x += 0.015*sin(p.z*4.0 + p.x*2.0 + iTime*1.5);
         col *= 0.4;
       }
-      nr.xz += (0.004 + 0.012*puddle) * vec2(sin(p.x*6.1 + iTime*2.3) + sin(p.z*4.7 - iTime*1.9), sin(p.z*5.3 + iTime*2.1) + sin(p.x*3.9 - iTime*1.6));
+      nr.xz += (0.003 + 0.016*puddle*uMood.x) * vec2(sin(p.x*6.1 + iTime*2.3) + sin(p.z*4.7 - iTime*1.9), sin(p.z*5.3 + iTime*2.1) + sin(p.x*3.9 - iTime*1.6));
       n = normalize(nr);
       vec3 rr = reflect(rd, n);
       vec3 rp = p + n*0.02;
@@ -572,7 +573,8 @@ vec3 tent(vec2 uv, float lod){
 
 // screen-space rain: two layers of slanted streaks
 float rain(vec2 frag, float t){
-  vec2 p = vec2(frag.x - frag.y*0.10, frag.y);
+  float wind = 0.06 + 0.10*sin(t / 9.0);                                   // gusts change the slant
+  vec2 p = vec2(frag.x - frag.y*wind, frag.y);
   float acc = 0.0;
   for (int l = 0; l < 2; l++){
     float sc = l == 0 ? 1.0 : 1.8;
@@ -717,7 +719,7 @@ const uniforms = {
   uMood:       { value: new THREE.Vector4(0.5, 1, 0, 1) }
 };
 const beatTimes = [-99, -99];
-let beatCount = 0, flashTime = -99;
+let beatCount = 0, flashTime = -99, slowEnergy = 0.5;
 let fadeInAt = -99, fadeOutAt = 1e9;           // seconds (page time)
 const titleEl = document.getElementById('title');
 function cueOpening(t){ fadeInAt = t; fadeOutAt = 1e9; setTimeout(() => titleEl.style.opacity = 1, 1000); setTimeout(() => titleEl.style.opacity = 0, 5000); }
@@ -1005,7 +1007,11 @@ function frame(now){
   if (TEST){ const ba = parseFloat(params.get('beat') ?? '99'); uniforms.uBeatAge.value.set(ba, 99); uniforms.uFlashAge.value = parseFloat(params.get('flash') ?? '99'); }
   else { uniforms.uBeatAge.value.set(t - beatTimes[0], t - beatTimes[1]); uniforms.uFlashAge.value = t - flashTime; }
   postU.uBloomThr.value = 0.8 - 0.4*a.bass;   // heavy bass: bigger halos
-  postU.uRain.value = TEST ? 0.5 : 0.25 + 0.75*a.high;
+  const rainEnv = TEST ? 0.5 : (0.15 + 0.85*Math.pow(Math.sin(t/17), 2)) * (0.5 + 0.5*a.high);   // drizzle -> downpour -> drizzle, highs on top
+  postU.uRain.value = rainEnv;
+  uniforms.uMood.value.x = rainEnv;
+  slowEnergy += ((a.energy) - slowEnergy) * (dt/1000) / 3.0;   // ~3 s follower
+  uniforms.uMood.value.y = TEST ? 1 : Math.min(1, Math.max(0, slowEnergy*1.6));
 
   renderer.setRenderTarget(rt);
   renderer.render(sceneRT, cam);
