@@ -154,20 +154,42 @@ vec3 skyColor(vec3 rd){
   return mix(hor, top, pow(y, 0.5));
 }
 
-vec3 windowLight(vec3 p, vec3 n, float t){
-  if (n.y > 0.5 || p.y < 0.9) return vec3(0.0);            // no windows on roofs / ground floor
+// Windows: per-building type, clustered 4-class brightness, mid floors densest, warm leak onto the wall.
+// Returns emission; `leak` receives warm light spilling onto the surrounding wall (0..1).
+vec3 windowLight(vec3 p, vec3 n, float t, out float leak){
+  leak = 0.0;
+  if (n.y > 0.5) return vec3(0.0);
   vec2 id = floor(p.xz / CELL);
+  vec2 hs; float ht; cellParams(id, hs, ht);
+  float type = hash21(id + 41.3);
+  vec2 ws = type < 0.33 ? vec2(0.34, 0.74) : (type < 0.66 ? vec2(0.78, 0.44) : vec2(0.50, 0.50));   // tall / wide / square
+  float face = abs(n.x) > 0.5 ? 0.37 : 0.0;
   float u = abs(n.x) > 0.5 ? p.z : p.x;
-  vec2 g = vec2(u / 0.45, p.y / 0.6);
+  vec2 g = vec2(u, p.y) / ws;
   vec2 c = floor(g), f = fract(g);
-  float density = 0.15 + 0.35*uAudio.z*uParams.x;          // highs switch more windows on
-  float lit = step(hash21(c + id*13.17 + (abs(n.x) > 0.5 ? 0.37 : 0.0)), density);
-  vec2 inner = smoothstep(0.22, 0.30, f) * smoothstep(0.22, 0.30, 1.0 - f);
-  float bright = 0.5 + 0.9*hash21(c*1.71 + id + 3.3);
-  float lod = smoothstep(25.0, 90.0, t);                    // far away: average, no sparkle
-  float e = mix(lit*inner.x*inner.y*bright, density*0.22, lod);
-  vec3 tint = mix(vec3(1.0, 0.70, 0.42), vec3(1.0, 0.82, 0.60), hash21(c*0.37 + id*2.1));   // #FFB36B family
-  return tint * 2.2 * e;
+  float fy = clamp(p.y / max(ht, 1.0), 0.0, 1.0);
+  float prof = smoothstep(0.0, 0.22, fy) * (1.0 - smoothstep(0.72, 1.0, fy));   // ground + top floors mostly dark
+  float occ = 0.4 + 0.5*hash21(id + 77.7);                                       // per-building occupancy
+  vec3 emit = vec3(0.0);
+  for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++){
+    vec2 cc = c + vec2(float(i), float(j));
+    float cl = hash21(floor(cc / 3.0) + id*7.7 + face);          // 3x3 cluster value
+    float hw = hash21(cc + id*13.17 + face);
+    float v  = mix(hw, cl, 0.55);                                   // clustered, not uniform
+    float b  = v < 0.30 ? 0.0 : (v < 0.75 ? 0.12 : (v < 0.93 ? 2.2 : 6.0));   // off / dim / bright / near-white
+    b *= step(hash21(cc*2.3 + id + 9.0), prof * occ);
+    vec2 d = f - vec2(float(i), float(j)) - 0.5;                   // pixel -> neighbour window centre, cell units
+    if (i == 0 && j == 0){
+      vec2 rect = smoothstep(0.04, 0.0, abs(d) - vec2(0.22, 0.27));
+      vec3 tint = mix(vec3(1.0, 0.70, 0.42), vec3(1.0, 0.82, 0.60), hash21(cc*0.37 + id*2.1));
+      tint = mix(tint, vec3(1.0, 0.92, 0.80), step(2.0, b));       // the rare very-bright ones go near white
+      emit = tint * b * rect.x * rect.y;
+    }
+    leak += b * smoothstep(1.1, 0.25, length(d * vec2(1.0, ws.y / ws.x)));
+  }
+  float lod = smoothstep(25.0, 90.0, t);                            // far: average, no sparkle
+  leak = mix(leak * 0.22, 0.04 * prof * occ, lod);
+  return mix(emit, vec3(1.0, 0.76, 0.52) * 0.10 * prof * occ, lod) * 2.2;
 }
 
 vec3 shade(vec3 p, vec3 n, vec3 rd, float t, int mat, bool cheap){
@@ -179,7 +201,12 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float t, int mat, bool cheap){
   vec3 skyAmb = vec3(0.02, 0.035, 0.06) * (0.55 + 0.45*n.y);
   float ao = cheap ? 0.8 : calcAO(p, n);
   vec3 col = alb * (keyCol*dif + skyAmb) * mix(0.15, 1.0, ao);
-  if (mat == 1) col += windowLight(p, n, t);
+  if (mat == 1){
+    float leak;
+    vec3 w = windowLight(p, n, t, leak);
+    col += alb * vec3(1.0, 0.70, 0.42) * leak * 1.8;              // warm spill on the wall next to lit windows
+    col += w;
+  }
   float roY = p.y - rd.y*t;
   float midY = max(0.5*(roY + p.y), 0.0);
   float dens = 0.011 * (0.7 + 0.6*uAudio.y*uParams.x) * uParams.y * exp(-0.035*midY);   // mids thicken the fog
@@ -394,7 +421,7 @@ const postU = {
   tScene: { value: rt.texture }, tBright: { value: rtBright.texture },
   uRes: { value: new THREE.Vector2(1, 1) }, uBrightRes: { value: new THREE.Vector2(1, 1) },
   uMode: { value: 0 }, uTime: { value: 0 }, uFrame: { value: 0 },
-  uBloomThr: { value: 0.8 }, uBloomStr: { value: 0.35 }, uRain: { value: 0.5 }, uExposure: { value: 1.0 }
+  uBloomThr: { value: 0.8 }, uBloomStr: { value: 0.35 }, uRain: { value: 0.5 }, uExposure: { value: 1.1 }
 };
 const postMat = new THREE.RawShaderMaterial({
   glslVersion: THREE.GLSL3, uniforms: postU,
