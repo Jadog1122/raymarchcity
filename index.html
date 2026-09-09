@@ -26,6 +26,7 @@
   #panel .keys{opacity:.4;margin-top:4px}
   #src{display:flex;gap:6px}
   body.nocursor{cursor:none}
+  #title{position:fixed;left:6vw;bottom:12vh;font-weight:300;font-size:15px;letter-spacing:.45em;color:#e8e2d8;opacity:0;pointer-events:none;z-index:6;transition:opacity 1.2s ease}
   button{background:rgba(20,24,32,.7);color:#cfd3d8;border:1px solid rgba(207,211,216,.25);padding:6px 12px;font:12px inherit;cursor:pointer;border-radius:3px}
   button:hover{border-color:#ffb870}
   button.on{border-color:#ffb870;color:#ffb870}
@@ -54,6 +55,7 @@
   <div class="keys">F 全屏 · S 存帧 · H 隐藏 · R 录 30s</div>
 </div>
 <div id="bars" class="hidden"><i></i><i></i><i></i><i></i><i></i></div>
+<div id="title">NIGHT CITY</div>
 <audio id="player" loop crossorigin="anonymous" class="hidden"></audio>
 <script id="vert" type="x-shader/x-vertex">
 precision highp float;
@@ -226,8 +228,8 @@ float beamAt(vec3 p){
   vec3 v = p - S; float s = dot(v, D);
   if (s < 0.0) return 0.0;
   float dist = length(v - D*s);
-  float rad = 1.2 + 0.05*s;
-  return smoothstep(rad, rad*0.35, dist) / (1.0 + 0.00008*s*s);
+  float rad = 1.2 + 0.035*s;
+  return smoothstep(rad, rad*0.35, dist) / (1.0 + 0.00012*s*s);
 }
 // Street lamps: one per block on each side of every N-S street, 3.2 high, tungsten. Nearest four light the scene.
 vec3 lampLight(vec3 p, vec3 n){
@@ -435,7 +437,7 @@ vec3 volumetric(vec3 ro, vec3 rd, float tmax, vec2 frag){
     }
     t += dt;
   }
-  return vec3(0.55, 0.72, 1.0) * acc * 0.05 * uParams.y;
+  return vec3(0.55, 0.72, 1.0) * min(acc, 30.0) * 0.03 * uParams.y;
 }
 
 vec3 render(vec3 ro, vec3 rd, vec2 uv){
@@ -655,6 +657,7 @@ void main(){
   // 2.39:1 letterbox
   float barH = max(0.0, (uRes.y - uRes.x / 2.39) * 0.5);
   if (gl_FragCoord.y < barH || gl_FragCoord.y > uRes.y - barH) col = vec3(0.0);
+  col *= uMood.w;                                                     // fade in / out
   if (any(isnan(col)) || any(isinf(col))) col = vec3(1.0, 0.0, 1.0);
   fragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
 }
@@ -715,6 +718,9 @@ const uniforms = {
 };
 const beatTimes = [-99, -99];
 let beatCount = 0, flashTime = -99;
+let fadeInAt = -99, fadeOutAt = 1e9;           // seconds (page time)
+const titleEl = document.getElementById('title');
+function cueOpening(t){ fadeInAt = t; fadeOutAt = 1e9; setTimeout(() => titleEl.style.opacity = 1, 1000); setTimeout(() => titleEl.style.opacity = 0, 5000); }
 let searchAngle = -1.75;
 const ctl = { response: 1, fog: 1, speed: 1 };
 window.__ctl = ctl; window.__u = uniforms;
@@ -884,6 +890,7 @@ const barEls = [...bars.querySelectorAll('i')];
 let barsVisible = true;
 function start(){
   ensureCtx(); audio.ctx.resume();
+  cueOpening((performance.now() - t0) / 1000);
   overlay.classList.add('hidden'); srcBox.classList.remove('hidden'); bars.classList.remove('hidden');
 }
 // R: record the canvas for 30 s -> webm (VP9, 8 Mbps)
@@ -900,9 +907,10 @@ function toggleRecord(){
   rec.onstop = () => {
     const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(chunks, { type: 'video/webm' }));
     a.download = 'nightcity-' + Date.now() + '.webm'; a.click();
-    rec = null; srcName.textContent = srcName.textContent.replace(' ● REC', '');
+    rec = null; srcName.textContent = srcName.textContent.replace(' ● REC', ''); fadeInAt = (performance.now() - t0) / 1000 - 2; fadeOutAt = 1e9;
   };
   rec.start(1000);
+  { const nowS = (performance.now() - t0) / 1000; cueOpening(nowS); fadeOutAt = nowS + recSeconds - 1.5; }
   srcName.textContent += ' ● REC';
   recTimer = setTimeout(() => rec && rec.stop(), recSeconds*1000);
 }
@@ -980,13 +988,18 @@ function frame(now){
   uniforms.uParams.value.set(ctl.response, ctl.fog, ctl.speed, 0);
   searchAngle = TEST ? parseFloat(params.get('search') ?? '-1.75') : searchAngle + (dt/1000) * (2*Math.PI/20) * (0.6 + 1.2*a.bass);
   uniforms.uSearch.value = searchAngle;
+  {
+    const tp = (now - t0) / 1000;
+    const fi = Math.min(1, Math.max(0, (tp - fadeInAt) / 2.0)), fo = Math.min(1, Math.max(0, (fadeOutAt - tp) / 1.5));
+    const f = Math.min(fi, fo); uniforms.uMood.value.w = TEST ? 1 : f*f*(3 - 2*f);
+  }
   { // searchlight strength at the camera (same maths as beamAt in GLSL), drives the lit rain in post
     const S = [14, 92, camZ + 200], ct = Math.cos(0.44), st = Math.sin(0.44);
     const D = [Math.cos(searchAngle)*ct, -st, Math.sin(searchAngle)*ct];
     const v = [-0.9 - S[0], 1.5 - S[1], camZ - S[2]]; const s = v[0]*D[0] + v[1]*D[1] + v[2]*D[2];
     let bm = 0;
-    if (s > 0){ const px = v[0]-D[0]*s, py = v[1]-D[1]*s, pz = v[2]-D[2]*s; const dist = Math.hypot(px, py, pz); const rad = 1.2 + 0.05*s;
-      const k = Math.min(1, Math.max(0, (rad - dist) / (rad*0.65))); bm = k*k*(3-2*k) / (1 + 0.00008*s*s); }
+    if (s > 0){ const px = v[0]-D[0]*s, py = v[1]-D[1]*s, pz = v[2]-D[2]*s; const dist = Math.hypot(px, py, pz); const rad = 1.2 + 0.035*s;
+      const k = Math.min(1, Math.max(0, (rad - dist) / (rad*0.65))); bm = k*k*(3-2*k) / (1 + 0.00012*s*s); }
     uniforms.uMood.value.z = bm;
   }
   if (TEST){ const ba = parseFloat(params.get('beat') ?? '99'); uniforms.uBeatAge.value.set(ba, 99); uniforms.uFlashAge.value = parseFloat(params.get('flash') ?? '99'); }
