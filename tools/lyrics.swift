@@ -59,8 +59,10 @@ DispatchQueue.global().async {
     let chunk = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(b - a))!
     chunk.frameLength = AVAudioFrameCount(b - a); memcpy(chunk.floatChannelData![0], x + a, (b - a) * 4)
     let curl = tmpDir.appendingPathComponent("lyrics-chunk-\(ri).wav")
-    guard let out = try? AVAudioFile(forWriting: curl, settings: [AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: sr, AVNumberOfChannelsKey: 1, AVLinearPCMBitDepthKey: 16, AVLinearPCMIsFloatKey: false]) else { log += "chunk \(ri): cannot create wav\n"; continue }
-    do { try out.write(from: chunk) } catch { log += "chunk \(ri): write failed \(error)\n"; continue }
+    var wrote = false
+    do { let out = try AVAudioFile(forWriting: curl, settings: fmt.settings); try out.write(from: chunk); wrote = true }   // `out` is released here: the file is flushed and closed
+    catch { log += "chunk \(ri): write failed \(error)\n" }
+    if !wrote { continue }
     let req = SFSpeechURLRecognitionRequest(url: curl); req.shouldReportPartialResults = false
     req.requiresOnDeviceRecognition = rec.supportsOnDeviceRecognition
     let done = DispatchSemaphore(value: 0); var segs: [SFTranscriptionSegment] = []
