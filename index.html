@@ -527,6 +527,7 @@ vec3 lightAtPoint(vec3 P){
 vec3 rainLayers(vec3 ro, vec3 rd, float tmax, vec3 col, vec2 frag){
   float wind = 0.06 + 0.10*sin(iTime / 9.0);
   float dens = uMood.x;
+  float rigK = length(ro.xz - vec2(-0.9, uCamZ)) > 8.0 ? 0.3 : 1.0;      // aerial / river rigs: rain is far below the lens
   for (int k = 0; k < 3; k++){
     float d = k == 0 ? 2.4 : (k == 1 ? 5.5 : 12.0);
     if (d > tmax) break;
@@ -544,7 +545,7 @@ vec3 rainLayers(vec3 ro, vec3 rd, float tmax, vec3 col, vec2 frag){
     float r = streak * xw * on;
     if (r > 0.002){
       vec3 L = min(lightAtPoint(P), vec3(1.2));
-      col += r * L * (k == 0 ? 0.45 : (k == 1 ? 0.35 : 0.3)) * exp(-0.03*d);
+      col += r * L * (k == 0 ? 0.45 : (k == 1 ? 0.35 : 0.3)) * exp(-0.03*d) * rigK;
     }
   }
   return col;
@@ -774,7 +775,7 @@ vec3 volumetric(vec3 ro, vec3 rd, float tmax, vec2 frag){
     }
     t += dt;
   }
-  return vec3(0.55, 0.72, 1.0) * min(acc, 30.0) * 0.03 * uParams.y;
+  return vec3(0.55, 0.72, 1.0) * min(acc, 10.0) * 0.03 * uParams.y;
 }
 
 vec3 render(vec3 ro, vec3 rd, vec2 uv){
@@ -802,7 +803,8 @@ vec3 render(vec3 ro, vec3 rd, vec2 uv){
       }
       nr.xz += (0.003 + 0.016*puddle*uMood.x) * vec2(sin(p.x*6.1 + iTime*2.3) + sin(p.z*4.7 - iTime*1.9), sin(p.z*5.3 + iTime*2.1) + sin(p.x*3.9 - iTime*1.6));
       { float rough = (1.0 - 0.85*puddle) * (1.0 - dry);                  // damp asphalt: rough reflection, converged by TAA
-        vec2 jr = (hash22(gl_FragCoord.xy + fract(iTime)*17.0) - 0.5) * 0.10 * rough; nr.xz += jr; }
+        float taaOn = step(1e-4, length(uJitter));
+        vec2 jr = (hash22(gl_FragCoord.xy + fract(iTime)*17.0) - 0.5) * 0.10 * rough * taaOn; nr.xz += jr; }
       n = normalize(nr);
       vec3 rr = reflect(rd, n);
       vec3 rp = p + n*0.02;
@@ -906,7 +908,8 @@ vec4 fxaa(vec2 uv){
 vec3 fetchScene(vec2 uv){
   vec4 c = fxaa(uv);
   float d = c.a * 320.0;
-  float coc = clamp(abs(d - uFocus) / max(uFocus, 1.0) * uAperture, 0.0, 7.0);       // pixels
+  float coc = d > uFocus ? (1.0 - uFocus / d) * uAperture * 1.6 : (uFocus - d) / max(uFocus, 1.0) * uAperture * 2.0;   // far: gentle; near: stronger
+  coc = clamp(coc, 0.0, 3.5);
   if (coc < 0.6) return c.rgb;
   vec3 s = c.rgb; float w = 1.0;
   for (int i = 0; i < 12; i++){
@@ -993,7 +996,7 @@ void main(){
   uv += (vec2(hash21(vec2(uFrame, 1.0)), hash21(vec2(uFrame, 2.0))) - 0.5) * 0.7 / uRes;   // gate weave: the frame drifts by a fraction of a pixel
   vec2 cv = uv - 0.5;
   float r = length(cv) / 0.7071;
-  vec2 off = cv * r * (1.5 / uRes);                          // chromatic aberration, 1.5 px at the corners
+  vec2 off = cv * r * (0.8 / uRes);                          // chromatic aberration, 0.8 px at the corners
   vec3 col = fetchScene(uv);
   float fr = smoothstep(0.3, 1.0, r);                         // fringe only toward the edges: one AA pass, two cheap taps
   col.r = mix(col.r, texture(tScene, uv + off).r, fr);
@@ -1017,7 +1020,7 @@ void main(){
     for (int i = 0; i < 3; i++){
       float fi = float(i);
       vec2 c = vec2(0.1 + 0.8*hash21(vec2(slot, fi*3.1)) * aspect, 0.3 + 0.6*hash21(vec2(slot + 7.0, fi*1.7)));
-      float rad = 0.012 + 0.014*hash21(vec2(fi, slot + 2.0));
+      float rad = 0.008 + 0.010*hash21(vec2(fi, slot + 2.0));
       float run = smoothstep(0.35, 1.0, ph) * 0.3 * hash21(vec2(slot, fi + 9.0));
       vec2 q = vec2(uv.x * aspect, uv.y) - (c - vec2(0.0, run));
       float d = length(q) / rad;
@@ -1031,7 +1034,7 @@ void main(){
         float rim = pow(max(0.0, dot(nrm, normalize(vec3(-0.5, 0.7, 0.55)))), 28.0) * 0.06;
         float vis = 0.25 + 0.75*smoothstep(0.02, 0.35, lum);          // reads only against light
         float edge = smoothstep(1.0, 0.82, d);
-        col = mix(col, through * 1.15 + rim, edge * vis);
+        col = mix(col, through * 0.8 + rim, edge * vis * 0.6);
       }
     }
   }
@@ -1556,7 +1559,7 @@ function renderFrame(now){
   if (taaOn) uniforms.uJitter.value.set(halton(jitterIdx + 1, 2) - 0.5, halton(jitterIdx + 1, 3) - 0.5); else uniforms.uJitter.value.set(0, 0);
   postU.uTaa.value = taaOn ? 1 : 0;
   postU.uRig.value = rig;
-  { const FOCUS = [60, 7, 26, 90], APER = [1.6, 2.6, 3.0, 2.2];
+  { const FOCUS = [60, 9, 26, 90], APER = [1.4, 1.6, 2.0, 1.8];
     const age = t - shotStart, pull = TEST ? 1 : Math.min(1, age / 0.6);
     const f = FOCUS[rig] * (0.35 + 0.65 * pull*pull*(3 - 2*pull));                  // focus pull after a cut
     postU.uFocus.value = f; postU.uAperture.value = APER[rig]; }
