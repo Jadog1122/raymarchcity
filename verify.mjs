@@ -147,6 +147,9 @@ if (!(magentaPct < 0.1)) fails.push(`magenta ${magentaPct.toFixed(3)}% >= 0.1%`)
 if (!(dark5 < 0.03)) fails.push(`dark5 ${dark5.toFixed(3)} >= 0.03 (no true blacks)`);
 if (!(bright1 > 0.9)) fails.push(`bright1 ${bright1.toFixed(3)} <= 0.9 (no highlights)`);
 if (!(warmPct <= 12)) fails.push(`warm ${warmPct.toFixed(1)}% > 12% (two-colour rule broken)`);
+const CENTROID_MIN = +(process.env.CENTROID_MIN ?? '3'), BLOBS_MAX = +(process.env.BLOBS_MAX ?? '90');
+if (CENTROID_MIN > 0 && !(centroidPct >= CENTROID_MIN)) fails.push(`centroid ${centroidPct.toFixed(1)}% < ${CENTROID_MIN}% (composition too centred)`);
+if (BLOBS_MAX > 0 && !(blobs <= BLOBS_MAX)) fails.push(`highlight blobs ${blobs} > ${BLOBS_MAX} (no light hierarchy)`);
 if (FLICKER_MAX > 0 && !(flickerPct <= FLICKER_MAX)) fails.push(`flicker ${flickerPct.toFixed(2)}% > ${FLICKER_MAX}% (edge aliasing)`);
 if (!NOREC && !(recFrames >= 140)) fails.push(`recording ${recFrames} frames < 140 in 5 s`);
 if (errors.some(e => /pageerror|SHADER ERROR/.test(e))) fails.push('page/shader errors in console');
