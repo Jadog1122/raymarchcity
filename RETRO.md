@@ -23,3 +23,9 @@
 - 根因：没有在每个里程碑开始/结束时真的跑 `date`。
 - 修法：里程碑开始和 commit 前各跑一次 `date` 写进 PLAN.md。
 - 下次如何避免：CLAUDE.md 加规则（已加）。
+
+## 5. M6 第 5 步 shader 编译失败：函数定义顺序（20:41）
+- 症状：verify 报 `beamAt / searchOrigin: no matching overloaded function found`，整屏黑。
+- 根因：新函数插在 volumetric() 前面，但 shade() 在更前面就调用了它们；GLSL 没有前向声明就不能后定义。
+- 修法：把探照灯三个函数移到 windowLight/shade 之前。
+- 下次如何避免：往 shader 插新函数时按"被谁调用"决定位置，工具函数一律放到 map() 之后、shade() 之前的固定区段。
