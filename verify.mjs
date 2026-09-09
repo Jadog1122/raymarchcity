@@ -134,6 +134,20 @@ function tailMean(fromDark, frac){
 const BRIGHT_FRAC = +(process.env.BRIGHT_FRAC ?? '0.005');   // M8: fewer, better lights -> judge the top 0.5 %
 const dark5 = tailMean(true, 0.05), bright1 = tailMean(false, BRIGHT_FRAC);
 
+// ---------- optional A/B: grid-walk tracer vs reference sphere-trace ----------
+let abPct = -1;
+if (process.env.AB) {
+  const b2 = await chromium.launch({ headless: false, args: ['--ignore-gpu-blocklist'] });
+  const c2 = await b2.newContext({ viewport: { width: 1720, height: 720 }, deviceScaleFactor: 2 });
+  const p4 = await c2.newPage(); await p4.goto(url + '&path=0'); await p4.waitForTimeout(2500);
+  await p4.screenshot({ path: 'shots/latest-ref.png' }); await b2.close();
+  const R = decodePNG(fs.readFileSync('shots/latest-ref.png')); let df = 0;
+  for (let i = 0; i < png.w * png.h; i++) { const o = i * png.bpp;
+    const la = 0.2126*png.data[o] + 0.7152*png.data[o+1] + 0.0722*png.data[o+2], lb = 0.2126*R.data[o] + 0.7152*R.data[o+1] + 0.0722*R.data[o+2];
+    if (Math.abs(la - lb) > 51) df++; }
+  abPct = 100 * df / (png.w * png.h);
+  console.log(`A/B tracer vs reference: ${abPct.toFixed(2)}% pixels differ`);
+}
 // ---------- report ----------
 console.log('stats:', JSON.stringify(stats));
 console.log(`png: ${png.w}x${png.h}  nonBlack=${nonBlackPct.toFixed(1)}%  magenta=${magentaPct.toFixed(3)}%  dark5=${dark5.toFixed(3)}  bright1=${bright1.toFixed(3)}  warm=${warmPct.toFixed(1)}%  flicker=${flickerPct.toFixed(2)}%  centroid=${centroidPct.toFixed(1)}%  blobs=${blobs}`);
@@ -150,6 +164,7 @@ if (!(warmPct <= 12)) fails.push(`warm ${warmPct.toFixed(1)}% > 12% (two-colour 
 const CENTROID_MIN = +(process.env.CENTROID_MIN ?? '3'), BLOBS_MAX = +(process.env.BLOBS_MAX ?? '90');
 if (CENTROID_MIN > 0 && !(centroidPct >= CENTROID_MIN)) fails.push(`centroid ${centroidPct.toFixed(1)}% < ${CENTROID_MIN}% (composition too centred)`);
 if (BLOBS_MAX > 0 && !(blobs <= BLOBS_MAX)) fails.push(`highlight blobs ${blobs} > ${BLOBS_MAX} (no light hierarchy)`);
+if (abPct >= 0 && !(abPct <= 2)) fails.push(`A/B ${abPct.toFixed(2)}% > 2% (tracer disagrees with the reference)`);
 if (FLICKER_MAX > 0 && !(flickerPct <= FLICKER_MAX)) fails.push(`flicker ${flickerPct.toFixed(2)}% > ${FLICKER_MAX}% (edge aliasing)`);
 if (!NOREC && !(recFrames >= 140)) fails.push(`recording ${recFrames} frames < 140 in 5 s`);
 if (errors.some(e => /pageerror|SHADER ERROR/.test(e))) fails.push('page/shader errors in console');

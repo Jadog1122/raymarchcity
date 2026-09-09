@@ -79,6 +79,7 @@ uniform float uSearch;       // searchlight azimuth (integrated in JS)
 uniform vec2  uBeatAge;      // seconds since the last two beats (99 = none)
 uniform float uFlashAge;     // seconds since the last lightning (rare: every 8th beat or an energy peak)
 uniform vec4  uMood;         // rain, quiet(0..1 slow energy), beam strength at the camera, fade
+uniform float uPath;         // 1 = grid-walk tracer, 0 = reference sphere-trace
 
 // ---------- hashes ----------
 // integer hashes: exact and identical across shader compiles (fract(sin) / fract(big product) are not)
@@ -112,45 +113,33 @@ void cellParams(vec2 id, out vec2 hs, out float ht){
 vec3 towerPos(){ return vec3(14.0, 0.0, uCamZ + 200.0); }   // landmark: always 200 ahead, a little to the right
 float blink(){ return 1.0 - step(0.5, fract(iTime)); }        // 1 Hz aviation light
 
-float map(vec3 p){
-  float ground = p.y;
-  vec2 id = floor(p.xz / CELL);
-  vec2 q  = p.xz - (id + 0.5)*CELL;
-  float d = 1e5;
-  int mat = 1;
-  float rowm = mod(id.y, 7.0);
-  bool river = rowm == 3.0 || rowm == 4.0;                      // two empty rows every 7 blocks: water, only reflections
-  if (!river){
-    // sidewalk slab (kerb 0.12 high) and street lamps on both sides of every N-S street
-    if (p.y < 0.6){ d = sdBox(vec3(q.x, p.y - 0.06, q.y), vec3(CELL*0.5 - 1.55, 0.06, CELL*0.5 - 1.55)); mat = 2; }
-    float sx = p.x - (floor(p.x / CELL + 0.5))*CELL;            // street-local x, street centre at 0
-    if (abs(sx) < 2.0 && p.y < 3.6 && abs(q.y) < 1.5){
-      float lx = abs(sx) - 1.75, lz = q.y;
-      float post = max(length(vec2(lx, lz)) - 0.06, abs(p.y - 1.6) - 1.6);
-      float head = sdBox(vec3(lx, p.y - 3.22, lz), vec3(0.13, 0.04, 0.13));
-      if (post < d){ d = post; mat = 1; }
-      if (head < d){ d = head; mat = 6; }
+// ---- exact SDF components (one cell at a time) ----
+vec2 lotOffset(vec2 id, vec2 hs){ return (hash22(id + 11.9) - 0.5) * 2.0 * (CELL*0.5 - STREET - hs); }   // slide inside the lot, never into the street
+bool riverRow(float idy){ float r = mod(idy, 7.0); return r == 3.0 || r == 4.0; }
+
+float lotSDF(vec2 id, vec3 p, out int mat){                    // the building(s) of one cell, exact
+  mat = 1;
+  if (riverRow(id.y)) return 1e5;
+  vec2 hs; float ht; cellParams(id, hs, ht);
+  float h = hash21(id);
+  vec2 q = p.xz - (id + 0.5)*CELL - lotOffset(id, hs);
+  float b;
+  if (h > 0.95){                                              // tallest 5 %: three setbacks + antenna + red beacon
+    b = sdBox(vec3(q.x, p.y - ht*0.30, q.y), vec3(hs.x, ht*0.30, hs.y));
+    if (p.y > ht*0.55){
+      b = min(b, sdBox(vec3(q.x, p.y - ht*0.40, q.y), vec3(hs.x*0.72, ht*0.40, hs.y*0.72)));
+      b = min(b, sdBox(vec3(q.x, p.y - ht*0.50, q.y), vec3(hs.x*0.46, ht*0.50, hs.y*0.46)));
     }
-    vec2 hs; float ht; cellParams(id, hs, ht);
-    float h = hash21(id);
-    q -= (hash22(id + 11.9) - 0.5) * 2.0 * (CELL*0.5 - STREET - hs);   // slide inside the lot, never into the street
-    float b;
-    if (h > 0.95){                                              // tallest 5 %: three setbacks + antenna + red beacon
-      b = sdBox(vec3(q.x, p.y - ht*0.30, q.y), vec3(hs.x, ht*0.30, hs.y));
-      if (p.y > ht*0.55){                                       // upper tiers only matter above the first one
-        b = min(b, sdBox(vec3(q.x, p.y - ht*0.40, q.y), vec3(hs.x*0.72, ht*0.40, hs.y*0.72)));
-        b = min(b, sdBox(vec3(q.x, p.y - ht*0.50, q.y), vec3(hs.x*0.46, ht*0.50, hs.y*0.46)));
-      }
-      if (p.y > ht - 1.0){
-        float ah = ht*0.22;
-        b = min(b, sdBox(vec3(q.x, p.y - ht - ah*0.5, q.y), vec3(0.08, ah*0.5, 0.08)));
-        float beacon = sdBox(vec3(q.x, p.y - ht - ah, q.y), vec3(0.10));
-        if (beacon < b){ b = beacon; if (beacon < d) mat = 3; }
-      }
-    } else {
-      b = sdBox(vec3(q.x, p.y - ht*0.5, q.y), vec3(hs.x, ht*0.5, hs.y));
-      if (p.y < ht - 0.5){ }                                    // below the roof the main box is always closer
-      else if (hash21(id + 9.1) < 0.20){                             // 20 %: cluster of water tanks / plant rooms
+    if (p.y > ht - 1.0){
+      float ah = ht*0.22;
+      b = min(b, sdBox(vec3(q.x, p.y - ht - ah*0.5, q.y), vec3(0.08, ah*0.5, 0.08)));
+      float beacon = sdBox(vec3(q.x, p.y - ht - ah, q.y), vec3(0.10));
+      if (beacon < b){ b = beacon; mat = 3; }
+    }
+  } else {
+    b = sdBox(vec3(q.x, p.y - ht*0.5, q.y), vec3(hs.x, ht*0.5, hs.y));
+    if (p.y >= ht - 0.5){
+      if (hash21(id + 9.1) < 0.20){                           // 20 %: cluster of water tanks / plant rooms
         for (int k = 0; k < 3; k++){
           vec2 o = (hash22(id + 2.2 + float(k)*3.7) - 0.5) * (hs - 0.35) * 1.6;
           float rh = 0.35 + 0.6*hash21(id + 5.5 + float(k));
@@ -162,28 +151,114 @@ float map(vec3 p){
         b = min(b, sdBox(vec3(q.x - ro2.x, p.y - ht - rh*0.5, q.y - ro2.y), vec3(rs.x, rh*0.5, rs.y)));
       }
     }
-    if (b < d){ d = b; if (mat != 3) mat = 1; }
   }
-  // domain repetition safety: never step past the neighbouring cell's building
+  return b;
+}
+float slabSDF(vec2 id, vec3 p){                                 // sidewalk slab, kerb 0.12 high
+  if (riverRow(id.y)) return 1e5;
+  vec2 q = p.xz - (id + 0.5)*CELL;
+  return sdBox(vec3(q.x, p.y - 0.06, q.y), vec3(CELL*0.5 - 1.55, 0.06, CELL*0.5 - 1.55));
+}
+float lampSDF(vec2 id, vec3 p, out int mat){                    // the two street lamps of one cell (one per N-S street side)
+  mat = 1;
+  if (riverRow(id.y)) return 1e5;
+  float px0 = id.x*CELL + 1.75, px1 = (id.x + 1.0)*CELL - 1.75;
+  float lx = min(abs(p.x - px0), abs(p.x - px1));
+  float lz = p.z - (id.y + 0.5)*CELL;
+  float post = max(length(vec2(lx, lz)) - 0.06, abs(p.y - 1.6) - 1.6);
+  float head = sdBox(vec3(lx, p.y - 3.22, lz), vec3(0.13, 0.04, 0.13));
+  if (head < post){ mat = 6; return head; }
+  return post;
+}
+float towerSDF(vec3 p, out int mat){                            // landmark tower: 3 tiers, spire, beacon
+  mat = 5;
+  vec3 tp = p - towerPos();
+  float tw = sdBox(vec3(tp.x, tp.y - TOWER_H*0.25, tp.z), vec3(4.2, TOWER_H*0.25, 4.2));
+  tw = min(tw, sdBox(vec3(tp.x, tp.y - TOWER_H*0.36, tp.z), vec3(3.0, TOWER_H*0.36, 3.0)));
+  tw = min(tw, sdBox(vec3(tp.x, tp.y - TOWER_H*0.50, tp.z), vec3(1.9, TOWER_H*0.50, 1.9)));
+  tw = min(tw, sdBox(vec3(tp.x, tp.y - TOWER_H - 7.0, tp.z), vec3(0.22, 7.0, 0.22)));
+  float tb = sdBox(vec3(tp.x, tp.y - TOWER_H - 14.0, tp.z), vec3(0.35));
+  if (tb < tw){ mat = 3; return tb; }
+  return tw;
+}
+
+// full scene SDF (used by normals, AO, volumetric shadow taps and the reference march path)
+float map(vec3 p){
+  float ground = p.y;
+  vec2 id = floor(p.xz / CELL);
+  vec2 q  = p.xz - (id + 0.5)*CELL;
+  float d = 1e5; int mat = 1, m;
+  if (p.y < 0.6){ float sd = slabSDF(id, p); if (sd < d){ d = sd; mat = 2; } }
+  if (p.y < 3.6 && abs(q.y) < 1.5){ float ld = lampSDF(id, p, m); if (ld < d){ d = ld; mat = m; } }
+  float bd = lotSDF(id, p, m); if (bd < d){ d = bd; mat = m; }
+  // domain repetition safety for the reference march: never step past the neighbouring cell's building
   float bound = min(CELL*0.5 - abs(q.x), CELL*0.5 - abs(q.y)) + (CELL*0.5 - 2.0);
   d = min(d, bound);
-  // landmark tower (world space): 3 tiers, spire, beacon
   vec3 tp = p - towerPos();
   float tw = sdBox(vec3(tp.x, tp.y - TOWER_H*0.5 - 8.0, tp.z), vec3(4.2, TOWER_H*0.5 + 8.0, 4.2));   // coarse bound
-  if (tw < 2.0){
-    tw = sdBox(vec3(tp.x, tp.y - TOWER_H*0.25, tp.z), vec3(4.2, TOWER_H*0.25, 4.2));
-    tw = min(tw, sdBox(vec3(tp.x, tp.y - TOWER_H*0.36, tp.z), vec3(3.0, TOWER_H*0.36, 3.0)));
-    tw = min(tw, sdBox(vec3(tp.x, tp.y - TOWER_H*0.50, tp.z), vec3(1.9, TOWER_H*0.50, 1.9)));
-    tw = min(tw, sdBox(vec3(tp.x, tp.y - TOWER_H - 7.0, tp.z), vec3(0.22, 7.0, 0.22)));
-    float tb = sdBox(vec3(tp.x, tp.y - TOWER_H - 14.0, tp.z), vec3(0.35));
-    if (tb < tw){ tw = tb; if (tb < d) mat = 3; } else if (tw < d) mat = 5;
-  }
+  if (tw < 2.0){ tw = towerSDF(p, m); if (tw < d){ d = tw; mat = m; } }
   d = min(d, tw);
   gMat = (d < ground) ? mat : 2;
   return min(d, ground);
 }
 
+// ---- grid-walk tracer: buildings are extrusions, so walk the 2D block grid and only test what the ray crosses ----
+vec2 boxHit(vec3 ro, vec3 rd, vec3 bmin, vec3 bmax){
+  vec3 inv = 1.0 / rd;
+  vec3 t0 = (bmin - ro) * inv, t1 = (bmax - ro) * inv;
+  vec3 tm = min(t0, t1), tM = max(t0, t1);
+  return vec2(max(max(tm.x, tm.y), tm.z), min(min(tM.x, tM.y), tM.z));
+}
+float localMarch(int kind, vec2 id, vec3 ro, vec3 rd, float t0, float t1){   // sphere-trace one component inside its bound
+  float t = t0; int m;
+  for (int i = 0; i < 24; i++){
+    vec3 p = ro + rd*t;
+    float d = kind == 0 ? lotSDF(id, p, m) : (kind == 1 ? lampSDF(id, p, m) : towerSDF(p, m));
+    if (d < 0.0008*t + 0.0004) return t;
+    t += d;
+    if (t > t1 + 0.02) return -1.0;
+  }
+  return -1.0;
+}
+float traceDDA(vec3 ro, vec3 rd, float tmax){
+  rd.x = abs(rd.x) < 1e-5 ? 1e-5 : rd.x; rd.z = abs(rd.z) < 1e-5 ? 1e-5 : rd.z; rd.y = abs(rd.y) < 1e-6 ? 1e-6 : rd.y;
+  float best = tmax;
+  if (rd.y < 0.0){ float tg = -ro.y / rd.y; if (tg < best) best = tg; }                       // ground plane
+  vec3 tp0 = towerPos();
+  vec2 tb = boxHit(ro, rd, tp0 + vec3(-4.2, 0.0, -4.2), tp0 + vec3(4.2, TOWER_H + 14.5, 4.2));
+  if (tb.x < tb.y && tb.y > 0.0 && tb.x < best){ float t = localMarch(2, vec2(0.0), ro, rd, max(tb.x, 0.0), min(tb.y, best)); if (t > 0.0) best = t; }
+  vec2 cell = floor(ro.xz / CELL);
+  vec2 stp = sign(rd.xz);
+  vec2 tDelta = abs(CELL / rd.xz);
+  vec2 tMax = ((cell + max(stp, 0.0)) * CELL - ro.xz) / rd.xz;
+  float tCur = 0.0;
+  for (int i = 0; i < 96; i++){
+    float tExit = min(tMax.x, tMax.y);
+    float tLim = min(tExit, best);
+    if (tCur < tLim && !riverRow(cell.y)){
+      vec2 c = (cell + 0.5)*CELL;
+      float sh = CELL*0.5 - 1.55;
+      vec2 sb = boxHit(ro, rd, vec3(c.x - sh, -0.01, c.y - sh), vec3(c.x + sh, 0.12, c.y + sh));      // slab: the AABB is the shape
+      if (sb.x < sb.y && sb.x < tLim && sb.y > tCur){ float t = max(sb.x, tCur); if (t < best) best = t; }
+      vec2 hs; float ht; cellParams(cell, hs, ht); vec2 off = lotOffset(cell, hs);
+      float top = ht * 1.25 + 2.0;
+      vec2 bb = boxHit(ro, rd, vec3(c.x + off.x - hs.x, 0.0, c.y + off.y - hs.y), vec3(c.x + off.x + hs.x, top, c.y + off.y + hs.y));
+      if (bb.x < bb.y && bb.x < tLim && bb.y > tCur){ float t = localMarch(0, cell, ro, rd, max(bb.x, tCur), min(bb.y, tLim)); if (t > 0.0 && t < best) best = t; }
+      for (int k = 0; k < 2; k++){
+        float px = k == 0 ? cell.x*CELL + 1.75 : (cell.x + 1.0)*CELL - 1.75;
+        vec2 lb = boxHit(ro, rd, vec3(px - 0.14, 0.0, c.y - 0.14), vec3(px + 0.14, 3.27, c.y + 0.14));
+        if (lb.x < lb.y && lb.x < tLim && lb.y > tCur){ float t = localMarch(1, cell, ro, rd, max(lb.x, tCur), min(lb.y, tLim)); if (t > 0.0 && t < best) best = t; }
+      }
+    }
+    if (tExit >= best) break;
+    if (rd.y > 0.0 && ro.y + rd.y*tExit > 40.0) break;                                          // above every rooftop (tower already done)
+    if (tMax.x < tMax.y){ cell.x += stp.x; tCur = tMax.x; tMax.x += tDelta.x; } else { cell.y += stp.y; tCur = tMax.y; tMax.y += tDelta.y; }
+  }
+  return best < tmax ? best : -1.0;
+}
+
 vec2 raymarch(vec3 ro, vec3 rd){
+  if (uPath > 0.5){ float t = traceDDA(ro, rd, MAXD); if (t > 0.0) map(ro + rd*t); return vec2(t, 1.0); }
   float t = 0.0;
   for (int i = 0; i < 72; i++){
     vec3 p = ro + rd*t;
@@ -469,7 +544,8 @@ vec3 render(vec3 ro, vec3 rd, vec2 uv){
       vec3 rr = reflect(rd, n);
       vec3 rp = p + n*0.02;
       float t2 = 0.0, hit = -1.0;
-      for (int i = 0; i < 10; i++){
+      if (uPath > 0.5){ hit = traceDDA(rp, rr, 160.0); if (hit > 0.0) map(rp + rr*hit); }
+      else for (int i = 0; i < 10; i++){
         float d = map(rp + rr*t2);
         if (d < 0.002*t2 + 0.001){ hit = t2; break; }
         t2 += d;
@@ -722,7 +798,8 @@ const uniforms = {
   uSearch:     { value: 0 },
   uBeatAge:    { value: new THREE.Vector2(99, 99) },
   uFlashAge:   { value: 99 },
-  uMood:       { value: new THREE.Vector4(0.5, 1, 0, 1) }
+  uMood:       { value: new THREE.Vector4(0.5, 1, 0, 1) },
+  uPath:       { value: params.get('path') === '0' ? 0 : 1 }
 };
 const beatTimes = [-99, -99];
 let beatCount = 0, flashTime = -99, slowEnergy = 0.5, dropTime = -99;
