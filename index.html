@@ -88,6 +88,7 @@ float vnoise(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0 - 2.0*f);
 #define MAXD   320.0
 int gMat = 0;          // 1 building, 2 ground
 float gDepth = 0.0;    // hit distance of the primary ray (MAXD if sky)
+vec3  gRo = vec3(0.0);  // camera position (for cloud projection)
 
 float sdBox(vec3 p, vec3 b){ vec3 d = abs(p) - b; return length(max(d, 0.0)) + min(max(d.x, max(d.y, d.z)), 0.0); }
 
@@ -205,7 +206,7 @@ float calcAO(vec3 p, vec3 n){
   return clamp(1.0 - 1.2*occ, 0.0, 1.0);
 }
 
-vec3 skyColor(vec3 rd){
+vec3 skyBase(vec3 rd){
   float y = clamp(rd.y, 0.0, 1.0);
   vec3 top = vec3(0.0006, 0.0012, 0.0035);
   vec3 hor = vec3(0.024, 0.042, 0.068);
@@ -255,6 +256,22 @@ vec3 lampGlow(vec3 ro, vec3 rd, float tmax){
     acc += vec3(1.0, 0.72, 0.45) * (atan((tmax + b) / h) - atan(b / h)) / h;
   }
   return acc * 0.0008;
+}
+
+// Low cloud deck at y = 60, lit from below by the city; the searchlight paints it when it sweeps up.
+vec3 skyColor(vec3 rd){
+  vec3 base = skyBase(rd);
+  if (rd.y < 0.02) return base;
+  float dist = (60.0 - gRo.y) / rd.y;
+  vec2 cp = gRo.xz + rd.xz * dist;
+  vec3 cpos = vec3(cp.x, 60.0, cp.y);
+  cp += vec2(iTime*1.2, iTime*0.5);
+  float nz = 0.5*vnoise(cp*0.018) + 0.28*vnoise(cp*0.041 + 7.3) + 0.14*vnoise(cp*0.095 + 3.1);
+  float dens = smoothstep(0.40, 0.66, nz);
+  float fade = smoothstep(0.02, 0.22, rd.y) * exp(-dist*0.0025);       // thins toward the horizon, far clouds dissolve
+  vec3 cloud = vec3(0.034, 0.030, 0.028) * (1.0 + 1.2*(1.0 - rd.y));   // city light pollution on the underside
+  cloud += vec3(0.55, 0.72, 1.0) * 0.5 * beamAt(cpos);
+  return mix(base, cloud, dens * fade * 0.9);
 }
 
 // Signature move: on every beat a ring expands from the camera at 40 u/s; windows it passes flare x2.5 for 0.4 s, then fade.
@@ -350,7 +367,7 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float t, int mat, bool cheap){
   float midY = max(0.5*(roY + p.y), 0.0);
   float dens = 0.009 * uParams.y * exp(-0.035*midY);
   float fog = 1.0 - exp(-dens*t);
-  vec3 fogCol = skyColor(rd) * vec3(0.85, 1.0, 1.15) * (1.0 + 5.0*flash());  // fog colder than the sky; lightning lifts it
+  vec3 fogCol = skyBase(rd) * vec3(0.85, 1.0, 1.15) * (1.0 + 5.0*flash());  // fog colder than the sky; lightning lifts it
   col = mix(col, vec3(dot(col, vec3(0.3, 0.5, 0.2))), 0.5*fog);              // distance desaturation
   return mix(col, fogCol, fog);
 }
@@ -440,6 +457,7 @@ void main(){
   vec3 rt2 = rt*cos(roll) + up*sin(roll);
   up = -rt*sin(roll) + up*cos(roll); rt = rt2;
   vec3 rd = normalize(uv.x*rt + uv.y*up + 1.7*fw);
+  gRo = ro;
   vec3 col = render(ro, rd, uv);
   // NaN / Inf guard -> pure magenta. Output is linear HDR; alpha carries depth for the post pass.
   if (any(isnan(col)) || any(isinf(col))) col = vec3(1.0, 0.0, 1.0);
