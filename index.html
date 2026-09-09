@@ -396,7 +396,7 @@ vec3 carLights(vec3 p){
 
 // Signature move: on every beat a ring expands from the camera at 40 u/s; windows it passes flare x2.5 for 0.4 s, then fade.
 float ringBoost(vec3 p, float j){                                   // j: per-window jitter 0..1 (delay + decay rate)
-  float dist = length(p.xz - vec2(0.0, uCamZ));
+  float dist = length(p.xz - uCamRo.xz);
   float best = 0.0;
   for (int k = 0; k < 2; k++){
     float f = (k == 0 ? uBeatAge.x : uBeatAge.y) - dist / 40.0 - 0.15*j;   // time since the ring passed this window
@@ -689,7 +689,7 @@ void main(){
           vec3 mn = cur.rgb, mx = cur.rgb; vec2 inv = 1.0 / uRes;
           for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++){
             vec3 sN = texture(tScene, uv + vec2(float(i), float(j)) * inv).rgb; mn = min(mn, sN); mx = max(mx, sN); }
-          res = mix(cur.rgb, clamp(h.rgb, mn, mx), 0.85);
+          res = mix(cur.rgb, clamp(h.rgb, mn, mx), 0.75);
         }
       }
     }
@@ -847,7 +847,32 @@ const halton = (i, b) => { let f = 1, r = 0; while (i > 0) { f /= b; r += f * (i
 // camera: single source of truth, mirrors what the shader used to compute
 const V = { cross: (a, b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]], norm: a => { const l = Math.hypot(...a); return a.map(x => x / l); } };
 const sstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t*t*(3 - 2*t); };
+const RIG_MIN = [7, 8, 7, 6], RIG_MAX = 12;
+let rig = TEST ? parseInt(params.get('rig') ?? '1') : 1, shotStart = 0, cutFrames = 0;
+function lookAt(ro, target, focal, roll){
+  const fw = V.norm([target[0]-ro[0], target[1]-ro[1], target[2]-ro[2]]);
+  let rt = V.norm(V.cross(fw, [0, 1, 0])); let up = V.cross(rt, fw);
+  const c = Math.cos(roll), s = Math.sin(roll);
+  const rt2 = [rt[0]*c + up[0]*s, rt[1]*c + up[1]*s, rt[2]*c + up[2]*s];
+  up = [-rt[0]*s + up[0]*c, -rt[1]*s + up[1]*c, -rt[2]*s + up[2]*c];
+  return { ro, rt: rt2, up, fw, focal };
+}
 function cameraAt(t, z){
+  const age = TEST ? 4 : t - shotStart;
+  if (rig === 0){                                           // A: aerial, descending toward the city, tower ahead
+    const u = Math.min(1, age / 9);
+    const ro = [-26 + 4*u, 42 - 10*u, z - 20];
+    return lookAt(ro, [14, 26, z + 200], 2.0, 0.0);
+  }
+  if (rig === 2){                                           // C: on the river, lateral drift, long lens across the water
+    const zb = Math.round((z - 32) / 56) * 56 + 32;
+    const ro = [-8 + 0.35*age, 3.6, zb + 1.5];
+    return lookAt(ro, [14, 18, zb + 130], 2.6, 0.008*Math.sin(t*0.3));
+  }
+  if (rig === 3){                                           // D: tower push, long lens, slow rise
+    const ro = [-0.9, 11 + 0.25*age, z];
+    return lookAt(ro, [14, 62, z + 200], 3.2, 0.0);
+  }
   const ph = (t / 12) % 1; let e = ph < 0.5 ? ph*2 : 2 - ph*2; e = e*e*(3 - 2*e);
   const u = (((z - 32 + 28) % 56) + 56) % 56 - 28;
   let rise = sstep(-26, -14, u) * (1 - sstep(-6, 8, u)); rise = rise*rise*(3 - 2*rise);
@@ -1017,7 +1042,10 @@ function liveAudio(dt, nowSec){
       let mean = 0; for (const v of env) mean += v; mean /= n; for (let i = 0; i < n; i++) env[i] -= mean;
       let best = 0, bestLag = 0, e0 = 1e-9; for (let i = 0; i < n; i++) e0 += env[i]*env[i];
       for (let lag = 15; lag <= 50; lag++){ let c = 0; for (let i = lag; i < n; i++) c += env[i]*env[i - lag]; c /= e0; if (c > best){ best = c; bestLag = lag; } }
-      if (bestLag){ const bpm = 60 * 50 / bestLag; audio.bpm = audio.bpm ? audio.bpm*0.7 + bpm*0.3 : bpm; audio.period = 60 / audio.bpm; audio.bpmConf = best; }
+      if (bestLag){
+        const ac = lag => { let c = 0; for (let i = lag; i < n; i++) c += env[i]*env[i - lag]; return c / e0; };
+        const ym = ac(bestLag - 1), yp = ac(bestLag + 1), den = ym - 2*best + yp; const off = Math.abs(den) > 1e-9 ? 0.5*(ym - yp)/den : 0;   // parabolic peak
+        const bpm = 60 * 50 / (bestLag + off); audio.bpm = audio.bpm ? audio.bpm*0.7 + bpm*0.3 : bpm; audio.period = 60 / audio.bpm; audio.bpmConf = best; }
     }
   }
   // beat: raw bass vs its 1 s sliding mean
@@ -1152,7 +1180,16 @@ const t0 = performance.now();
 let lastRender = 0, fpsCount = 0, fpsT = performance.now(), msAcc = 0;
 function renderFrame(now){
   const t = TEST ? FIXED_TIME : (now - t0) / 1000;
-  const taaOn = !(TEST && !params.get('taa') && !REC);
+  if (!TEST){                                              // editing: pick the rig for the section, cut on a beat
+    const bySection = [1, 0, 3, 2];                          // verse -> street, build -> aerial, drop -> tower, breakdown -> river
+    const noAudio = audio.kind === 'none';
+    let want = noAudio ? (rig + 1) % 4 : bySection[audio.section];
+    const age = t - shotStart, onBeat = noAudio || (t - audio.lastBeat < 0.08);
+    if (want !== rig && onBeat && (age > RIG_MIN[rig] || (noAudio && age > 8))){ rig = want; shotStart = t; cutFrames = 2; }
+    else if (age > RIG_MAX && onBeat){ rig = (rig + 1) % 4; shotStart = t; cutFrames = 2; }
+  }
+  const taaOn = !(TEST && !params.get('taa') && !REC) && cutFrames === 0;
+  if (cutFrames > 0) cutFrames--;
   const c = cameraAt(t, camZ);
   if (!camPrev) camPrev = c;
   uniforms.uCamRo.value.fromArray(c.ro); uniforms.uCamRt.value.fromArray(c.rt); uniforms.uCamUp.value.fromArray(c.up); uniforms.uCamFw.value.fromArray(c.fw); uniforms.uFocal.value = c.focal;
@@ -1175,7 +1212,7 @@ function renderFrame(now){
   renderer.render(scenePost, cam);                 // bright extraction (+ auto mipmaps)
   postU.uMode.value = 1; postU.uRes.value.set(window.innerWidth, window.innerHeight);
   postU.tHistory.value = rtHist[1 - histCur].texture;
-  postU.uBlend.value = (TEST && !params.get('taa') && !REC) ? 0 : 0.15;
+  postU.uBlend.value = (TEST && !params.get('taa') && !REC) ? 0 : (cutFrames > 0 ? 0 : 0.08);
   renderer.setRenderTarget(rtHist[histCur]);
   renderer.render(scenePost, cam);                 // composite, blended with the previous frame
   postU.uMode.value = 2; postU.tHistory.value = rtHist[histCur].texture;
@@ -1212,7 +1249,8 @@ function frame(now){
   { // searchlight strength at the camera (same maths as beamAt in GLSL), drives the lit rain in post
     const S = [14, 92, camZ + 200], ct = Math.cos(0.44), st = Math.sin(0.44);
     const D = [Math.cos(searchAngle)*ct, -st, Math.sin(searchAngle)*ct];
-    const v = [-0.9 - S[0], 1.5 - S[1], camZ - S[2]]; const s = v[0]*D[0] + v[1]*D[1] + v[2]*D[2];
+    const cr = cameraAt(t, camZ).ro;
+    const v = [cr[0] - S[0], cr[1] - S[1], cr[2] - S[2]]; const s = v[0]*D[0] + v[1]*D[1] + v[2]*D[2];
     let bm = 0;
     if (s > 0){ const px = v[0]-D[0]*s, py = v[1]-D[1]*s, pz = v[2]-D[2]*s; const dist = Math.hypot(px, py, pz); const rad = 1.2 + 0.035*s;
       const k = Math.min(1, Math.max(0, (rad - dist) / (rad*0.65))); bm = k*k*(3-2*k) / (1 + 0.00012*s*s); }
