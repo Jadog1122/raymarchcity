@@ -999,6 +999,11 @@ void main(){
   vec2 off = cv * r * r * (0.6 / uRes);                      // chromatic aberration, 0.6 px, corners only
   vec3 col = fetchScene(uv);
   float fr = smoothstep(0.3, 1.0, r);                         // fringe only toward the edges: one AA pass, two cheap taps
+  { // no CA where depth of field is blurring: sharp R/B against blurred G paints green edges on silhouettes
+    float dCA = texture(tScene, uv).a * 320.0;
+    float cocCA = dCA > uFocus ? (1.0 - uFocus / dCA) * uAperture * 1.6 : (uFocus - dCA) / max(uFocus, 1.0) * uAperture * 2.0;
+    fr *= 1.0 - smoothstep(0.3, 0.8, cocCA);
+  }
   col.r = mix(col.r, texture(tScene, uv + off).r, fr);
   col.b = mix(col.b, texture(tScene, uv - off).b, fr);
   // bloom: 4 mip levels, 9-tap tent each
