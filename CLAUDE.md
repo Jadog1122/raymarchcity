@@ -35,3 +35,10 @@
 - GLSL 哈希只用整数哈希（uint 混洗），禁止 fract(sin)/fract(大数乘积)；verify 里保留同 URL 两次加载做差的确定性检查。
 - fps 突然掉一半：先用上一 commit 的 index.html 跑一次基线，区分代码和环境。
 - verify 前看 pmset -g batt：电池模式下 fps 数字不算数。
+
+## 播放器（M11）
+- `music/` 放 mp3；`node tools/scan-music.mjs` 生成 `music/manifest.json`（文件名解析歌手/曲名 + afinfo 量时长）。加 `--lyrics` 顺带检查歌词能否命中。
+- 页面走 http 时读 manifest；拖进来的文件存 IndexedDB，跨会话保留。歌词按 (曲名, 歌手, 时长) 查 lrclib，先精确后搜索，必须歌手对得上才接受（同名歌很多），结果缓存进 IndexedDB。
+- 中英双语文件名会拆成中文段和英文段分别尝试。
+- 音频文件不进仓库（.gitignore）。歌词只做运行时查询和本地缓存，不写进仓库。
+- 键位：空格 播放/暂停，L 歌单，← → 切歌，F 全屏，S 存帧，H 隐藏，R 录 30s。

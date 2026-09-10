@@ -1,3 +1,8 @@
 node_modules/
 shots/
 .DS_Store
+tools/lyrics
+tools/Lyrics.app/Contents/MacOS/lyrics
+# the audio itself stays out of the repo; the manifest that lists it does not
+music/*
+!music/manifest.json
