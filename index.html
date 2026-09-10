@@ -1185,10 +1185,15 @@ function currentLyric(time){
 function drawText(){
   const w = window.innerWidth, h = window.innerHeight;
   if (textCanvas.width !== w || textCanvas.height !== h){ textCanvas.width = w; textCanvas.height = h; }
-  const key = [textState.title, textState.titleA.toFixed(2), textState.lyric, textState.lyricA.toFixed(2), w, h].join('|');
+  const key = [textState.title, textState.titleA.toFixed(2), textState.lyric, textState.lyricA.toFixed(2), w, h].join('|');   // w,h cover the letterbox layout
   if (key === textState.drawnKey) return; textState.drawnKey = key;
   tctx.clearRect(0, 0, w, h);
-  const x = Math.round(w * 0.06), y = Math.round(h * 0.86), size = Math.max(13, Math.round(h * 0.024));
+  // keep the text inside the 2.39:1 frame: the post pass blacks out the bars, so anything drawn there is invisible
+  const barH = Math.max(0, Math.round((h - w / 2.39) * 0.5)), visH = h - 2 * barH;
+  const size = Math.max(13, Math.round(visH * 0.032));
+  const x = Math.round(w * 0.05);
+  const yLyric = h - barH - Math.round(visH * 0.08);
+  const y = yLyric - Math.round(size * 1.7);                 // title sits above the lyric line
   tctx.textBaseline = 'alphabetic';
   const cjk = s => /[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(s);
   const LATIN = '"Bodoni 72", Didot, "Playfair Display", "Times New Roman", Georgia, serif';
@@ -1210,7 +1215,7 @@ function drawText(){
     tctx.font = isCJK ? `300 ${Math.round(size*1.2)}px ${CJK}` : `italic 300 ${Math.round(size*1.05)}px ${LATIN}`;
     tctx.letterSpacing = isCJK ? '0.12em' : '0.08em';
     tctx.fillStyle = `rgba(232,226,216,${0.85*textState.lyricA})`;
-    tctx.fillText(textState.lyric, x, y + Math.round(size*2.2));
+    tctx.fillText(textState.lyric, x, yLyric);
   }
   tctx.shadowBlur = 0; tctx.shadowOffsetY = 0;
   textTex.needsUpdate = true;
