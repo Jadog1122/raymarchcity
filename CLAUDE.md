@@ -43,3 +43,6 @@
 - 音频文件不进仓库（.gitignore）。歌词只做运行时查询和本地缓存，不写进仓库。
 - 键位：空格 播放/暂停，L 歌单，← → 切歌，F 全屏，S 存帧，H 隐藏，R 录 30s。
 - 叠加层（文字/UI）按最终可见区定位（扣掉 2.39:1 黑边），不按画布；verify 窗口不能只有 1720x720 这一个刚好 2.39 的尺寸。
+- 跟随媒体时间的显示（歌词等）挂在媒体时钟上（timeupdate + 独立定时器），绝不挂渲染循环；渲染只在 `document.hidden` 时暂停，`blur` 不暂停。
+- `if (!TEST)` 包裹的代码 verify 覆盖不到：verify 必须另有一条不带 test 参数的真实页面冒烟检查（pageerror 即失败 + 歌单/歌词断言）。
+- 本地服务用 `npm run serve`（tools/serve.mjs，支持 Range）；python http.server 会让音频跳转静默失败。

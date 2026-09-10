@@ -13,6 +13,7 @@ const hhmm = new Date().toTimeString().slice(0, 5).replace(':', '');
 fs.mkdirSync('shots', { recursive: true });
 
 const errors = [];
+let smokeFail = '';
 try { const { execSync } = await import('node:child_process'); const b = execSync('pmset -g batt').toString(); if (/Battery Power/.test(b)) console.log('WARNING: on battery power — fps is not meaningful (' + (b.match(/\d+%/) || [''])[0] + ')'); } catch {}
 const browser = await chromium.launch({
   headless: false,
@@ -55,6 +56,45 @@ if (!NOREC) {
   }, [...fs.readFileSync(webm)]);
   console.log(`rec: ${d.suggestedFilename()} ${fs.statSync(webm).size} bytes, ${recFrames} frames in 5 s`);
   await ctx2.close();
+}
+// ---------- smoke test of the real page: ?test=1 skips most of the app, so load it the way a user does ----------
+{
+  const c3 = await browser.newContext({ viewport: { width: 1280, height: 720 } });
+  const p3 = await c3.newPage();
+  const bad = [];
+  p3.on('pageerror', e => bad.push('pageerror: ' + e.message));
+  p3.on('console', m => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) bad.push('console: ' + m.text().slice(0, 120)); });
+  // prefer the local server so the playlist path is covered too; fall back to file://
+  const served = await fetch('http://127.0.0.1:5173/index.html').then(r => r.ok).catch(() => false);
+  await p3.goto(served ? 'http://127.0.0.1:5173/index.html' : url.replace(/\?test=1.*$/, ''));
+  await p3.waitForTimeout(3000);
+  const live = await p3.evaluate(() => ({ lib: !!window.__lib, stats: !!window.__stats, tracks: document.querySelectorAll('.track').length }));
+  console.log(`smoke (${served ? 'http' : 'file://'}): lib=${live.lib} stats=${live.stats} tracks=${live.tracks}` + (bad.length ? ` errors=${bad.length}` : ''));
+  const real = bad.filter(b => !/manifest\.json/.test(b));                 // file:// cannot read the manifest; loadLibrary already falls back
+  if (real.length) smokeFail = 'runtime errors on the real page: ' + real[0];
+  else if (!live.lib || !live.stats) smokeFail = 'app did not initialise on the real page';
+  else if (served && live.tracks === 0) smokeFail = 'playlist did not render on the real page';
+  // lyrics must follow the audio even when rendering is paused (fullscreen on macOS blurs the window; hidden tabs stop rAF)
+  if (!smokeFail && served && live.tracks > 0) {
+    await p3.click('.track:nth-child(1)');
+    await p3.waitForFunction(() => window.__lyrics && window.__lyrics().length > 3, null, { timeout: 25000 }).catch(() => {});
+    await p3.waitForTimeout(800);
+    const seek = async t => { await p3.evaluate(s => { player.currentTime = s; }, t); await p3.waitForTimeout(1200);
+      return p3.evaluate(() => ({ lyric: window.__text ? window.__text.lyric : null, frames: window.__stats.frames })); };
+    // pick two moments that genuinely belong to different lines, so a repeated chorus cannot pass or fail it by accident
+    const picks = await p3.evaluate(() => { const L = window.__lyrics ? window.__lyrics() : [];
+      if (L.length < 4) return null;
+      const first = L[1], other = L.find(x => x.text !== first.text && x.t > first.t + 5);
+      return other ? { n: L.length, a: first.t + 1, b: other.t + 1 } : null; });
+    if (!picks) smokeFail = 'no usable lyrics loaded for the first track';
+    else {
+      const a1 = await seek(picks.a);
+      const b1 = await seek(picks.b);
+      console.log(`smoke lyrics: ${picks.n} lines, ${picks.a.toFixed(0)}s "${String(a1.lyric).slice(0, 12)}" -> ${picks.b.toFixed(0)}s "${String(b1.lyric).slice(0, 12)}"`);
+      if (!a1.lyric || a1.lyric === b1.lyric) smokeFail = 'lyric did not follow the audio position';
+    }
+  }
+  await c3.close();
 }
 await browser.close();
 
@@ -155,6 +195,7 @@ console.log(`png: ${png.w}x${png.h}  nonBlack=${nonBlackPct.toFixed(1)}%  magent
 if (errors.length) console.log('console errors:\n  ' + errors.slice(0, 5).join('\n  '));
 
 const fails = [];
+if (smokeFail) fails.push(smokeFail);
 if (stats.shaderError) fails.push('shaderError: ' + stats.shaderError.slice(0, 300));
 if (!(stats.fps >= 50)) { if (process.env.FPS_SOFT) console.log(`(fps ${stats.fps} < 50 — reported only, FPS_SOFT set)`); else fails.push(`fps ${stats.fps} < 50`); }
 if (!(nonBlackPct > 40)) fails.push(`nonBlack ${nonBlackPct.toFixed(1)}% <= 40%`);
