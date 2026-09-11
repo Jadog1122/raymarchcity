@@ -266,7 +266,7 @@ bool signOf(vec2 id, int k, out vec3 c, out vec3 e, out float atlasIdx){
   float side = hash21(id + 151.0 + float(k)*3.0) < 0.5 ? -1.0 : 1.0;
   float zoff = (hash21(id + 163.0 + float(k)*5.0) - 0.5) * max(hs.y - 0.4, 0.0) * 1.4;
   c = vec3(ctr.x + side*(hs.x + 0.34), y, ctr.y + zoff);
-  atlasIdx = floor(hash21(id + 177.0 + float(k)*7.0) * 31.999);
+  atlasIdx = floor(hash21(id + 177.0 + float(k)*7.0) * 47.999);
   return true;
 }
 // 屋上看板: a board standing on the roof, broadside to the street so it reads from up the block.
@@ -281,7 +281,7 @@ bool roofSignOf(vec2 id, out vec3 c, out vec3 e, out float ai){
   float w = min(hs.x * 0.85, 2.6), h = 0.75 + 0.35*hash21(id + 303.0);
   c = vec3(ctr.x + (hash21(id + 305.0) - 0.5)*hs.x*0.5, ht + 0.35 + h, ctr.y + (hash21(id + 307.0) - 0.5)*hs.y*0.8);
   e = vec3(w, h, 0.09);
-  ai = floor(hash21(id + 309.0) * 31.999);
+  ai = floor(hash21(id + 309.0) * 47.999);
   return true;
 }
 // 壁面看板: a panel flat on the facade, a couple of floors up.
@@ -298,7 +298,7 @@ bool wallSignOf(vec2 id, int k, out vec3 c, out vec3 e, out float ai){
   float side = hash21(id + 325.0 + float(k)) < 0.5 ? -1.0 : 1.0;
   e.z = min(hs.y * 0.7, 1.6);
   c = vec3(ctr.x + side*(hs.x + e.x*0.6), y, ctr.y + (hash21(id + 327.0 + float(k)) - 0.5)*(hs.y - e.z));
-  ai = floor(hash21(id + 329.0 + float(k)) * 31.999);
+  ai = floor(hash21(id + 329.0 + float(k)) * 47.999);
   return true;
 }
 // テナント看板: the stacked directory beside a multi-tenant entrance. This is the layer that was missing —
@@ -336,7 +336,7 @@ bool aboardOf(vec2 id, out vec3 c, out vec3 e, out float ai){
   vec2 ctr = (id + 0.5)*CELL + lotOffset(id, hs);
   float side = hash21(id + 383.0) < 0.5 ? -1.0 : 1.0;
   c = vec3(ctr.x + side*(hs.x + 0.62), 0.50, ctr.y + (hash21(id + 385.0) - 0.5)*(hs.y - 0.8));
-  ai = floor(hash21(id + 387.0) * 31.999);
+  ai = floor(hash21(id + 387.0) * 47.999);
   return true;
 }
 
@@ -346,23 +346,27 @@ float signsSDF(vec2 id, vec3 p){
   return d;
 }
 // Where a point sits on a flat panel, whichever way the panel faces.
-vec2 panelUV(vec3 p, vec3 c, vec3 e){
+vec2 panelUV(vec3 p, vec3 c, vec3 e, vec3 n){
   bool thinX = e.x < e.z;
   float u = thinX ? (p.z - c.z) / e.z : (p.x - c.x) / e.x;
+  // A street board is printed on both faces and reads the right way round from either side. Sharing
+  // one u across both meant the far face was a mirror image — every sign seen from behind was
+  // backwards, which is most of the signs in any given shot.
+  if (thinX ? (n.x > 0.0) : (n.z < 0.0)) u = -u;
   return vec2(u * 0.5 + 0.5, 0.5 - (p.y - c.y) / e.y * 0.5);
 }
 // Which horizontal board a point belongs to: rooftop, flush wall, or the one on the pavement.
-float hsignSample(vec3 p, out vec2 uvOut){
+float hsignSample(vec3 p, vec3 n, out vec2 uvOut){
   uvOut = vec2(0.5);
   vec2 id = floor(p.xz / CELL);
   vec3 c, e; float ai;
-  if (roofSignOf(id, c, e, ai)){ vec3 q = abs(p - c) - e; if (max(q.x, max(q.y, q.z)) < 0.04){ uvOut = panelUV(p, c, e); return ai; } }
-  for (int k = 0; k < 2; k++) if (wallSignOf(id, k, c, e, ai)){ vec3 q = abs(p - c) - e; if (max(q.x, max(q.y, q.z)) < 0.04){ uvOut = panelUV(p, c, e); return ai; } }
-  if (aboardOf(id, c, e, ai)){ vec3 q = abs(p - c) - e; if (max(q.x, max(q.y, q.z)) < 0.04){ uvOut = panelUV(p, c, e); return ai; } }
+  if (roofSignOf(id, c, e, ai)){ vec3 q = abs(p - c) - e; if (max(q.x, max(q.y, q.z)) < 0.04){ uvOut = panelUV(p, c, e, n); return ai; } }
+  for (int k = 0; k < 2; k++) if (wallSignOf(id, k, c, e, ai)){ vec3 q = abs(p - c) - e; if (max(q.x, max(q.y, q.z)) < 0.04){ uvOut = panelUV(p, c, e, n); return ai; } }
+  if (aboardOf(id, c, e, ai)){ vec3 q = abs(p - c) - e; if (max(q.x, max(q.y, q.z)) < 0.04){ uvOut = panelUV(p, c, e, n); return ai; } }
   return -1.0;
 }
 // Which sign a shaded point belongs to, and where on its printed face it sits.
-float signSample(vec3 p, out vec2 uvOut){
+float signSample(vec3 p, vec3 n, out vec2 uvOut){
   uvOut = vec2(0.5);
   vec2 id = floor(p.xz / CELL);
   for (int k = 0; k < 3; k++){
@@ -370,7 +374,12 @@ float signSample(vec3 p, out vec2 uvOut){
     if (!signOf(id, k, c, e, ai)) continue;
     vec3 q = abs(p - c) - e;
     if (max(q.x, max(q.y, q.z)) < 0.03){
-      uvOut = vec2((p.x - c.x) / e.x * 0.5 + 0.5, 0.5 - (p.y - c.y) / e.y * 0.5);
+      // A 袖看板 is a blade hanging off the building, printed on both faces and read from either end
+      // of the street. Both faces shared one u, so the one the camera actually drives towards — every
+      // single one of them, since the dolly runs up +z — was a mirror image.
+      float u = (p.x - c.x) / e.x;
+      if (n.z < 0.0) u = -u;
+      uvOut = vec2(u * 0.5 + 0.5, 0.5 - (p.y - c.y) / e.y * 0.5);
       return ai;
     }
   }
@@ -1564,7 +1573,7 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float t, int mat, bool cheap){
     }
   }
   if (mat == 12){                                                                 // rooftop board, wall panel or pavement board
-    vec2 uvp; float ai = hsignSample(p, uvp);
+    vec2 uvp; float ai = hsignSample(p, n, uvp);
     vec3 frame = vec3(0.09, 0.095, 0.10);
     if (ai < 0.0) return frame * 0.4;
     float ci = mod(ai, uHSignGrid.x), ri = floor(ai / uHSignGrid.x);
@@ -1580,14 +1589,14 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float t, int mat, bool cheap){
     vec2 bid = floor(p.xz / CELL);
     vec3 c, e; int tk = 0;
     for (int k = 0; k < 2; k++){ vec3 cc, ee; if (tenantOf(bid, k, cc, ee)){ vec3 q = abs(p - cc) - ee; if (max(q.x, max(q.y, q.z)) < 0.04){ c = cc; e = ee; tk = k; break; } } }
-    vec2 uvp = panelUV(p, c, e);
+    vec2 uvp = panelUV(p, c, e, n);
     float rows = 5.0, row = floor(clamp(uvp.y, 0.0, 0.999) * rows);
     float vin = fract(uvp.y * rows);
     vec3 outc = vec3(0.055, 0.058, 0.062);
     float gap = smoothstep(0.06, 0.14, vin) * smoothstep(0.94, 0.86, vin);        // a dark rule between rows
     float printed = step(0.35, abs(n.x));
     if (printed > 0.5 && gap > 0.0){
-      float ai = floor(hash21(bid + 393.0 + row * 7.0) * 31.999);
+      float ai = floor(hash21(bid + 393.0 + row * 7.0) * 47.999);
       float ci = mod(ai, uHSignGrid.x), ri = floor(ai / uHSignGrid.x);
       vec2 auv = (vec2(ci, ri) + clamp(vec2(uvp.x, vin), 0.02, 0.98)) / uHSignGrid;
       float on = hash21(bid + 395.0 + row * 3.0) < 0.78 ? 1.0 : 0.10;             // a floor or two is vacant
@@ -1605,7 +1614,7 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float t, int mat, bool cheap){
     return mix(outc, skyBase(rd) * vec3(0.75, 0.95, 1.2), 1.0 - exp(-fd*t));
   }
   if (mat == 8){                                                                  // shop sign: printed faces glow, edges are frame
-    vec2 suv; float ai = signSample(p, suv);
+    vec2 suv; float ai = signSample(p, n, suv);
     vec3 frame = vec3(0.10, 0.105, 0.11);
     if (ai < 0.0) return frame * 0.4;
     float ci = mod(ai, uSignGrid.x), ri = floor(ai / uSignGrid.x);
@@ -2118,7 +2127,7 @@ const rtBright = new THREE.WebGLRenderTarget(2, 2, {              // half-res br
 // ---------- signage atlas ----------
 // Japanese street signage is mostly 袖看板: internally lit boxes that stick out perpendicular from the
 // facade, one per tenant floor, text running top to bottom. Generic trade words only, no real marks.
-const SIGN_COLS = 8, SIGN_ROWS = 4, SIGN_CW = 128, SIGN_CH = 512;
+const SIGN_COLS = 8, SIGN_ROWS = 6, SIGN_CW = 128, SIGN_CH = 512;
 const SIGN_WORDS = [
   ['居酒屋', '#e8203a', '#fff2d8'], ['ラーメン', '#f2c200', '#241400'], ['カラオケ', '#e0197a', '#ffe8f4'],
   ['焼肉', '#d41414', '#ffe0b0'],   ['スナック', '#7b2ff2', '#f0e4ff'], ['喫茶', '#1f9c6a', '#eafff4'],
@@ -2130,7 +2139,13 @@ const SIGN_WORDS = [
   ['地下一階', '#4b5563', '#e5e7eb'],['貸室あり', '#b45309', '#fff7e0'], ['生ビール', '#eab308', '#1a1200'],
   ['麻雀', '#166534', '#dcfce7'],   ['銭湯', '#0369a1', '#e0f2fe'],     ['古書', '#7c2d12', '#fde68a'],
   ['写真', '#312e81', '#c7d2fe'],   ['電器', '#b91c1c', '#fee2e2'],     ['質', '#facc15', '#1c1917'],
-  ['ホテル', '#be185d', '#fce7f3'], ['駐車場', '#1e40af', '#dbeafe']
+  ['ホテル', '#be185d', '#fce7f3'], ['駐車場', '#1e40af', '#dbeafe'],
+  ['たばこ', '#374151', '#fde68a'], ['布団', '#0f766e', '#ccfbf1'],     ['そば', '#7c2d12', '#fed7aa'],
+  ['花', '#be123c', '#ffe4e6'],     ['米', '#a16207', '#fef3c7'],       ['洋品', '#1e3a8a', '#dbeafe'],
+  ['時計', '#0c4a6e', '#e0f2fe'],   ['印刷', '#334155', '#e2e8f0'],     ['靴', '#78350f', '#fde68a'],
+  ['理髪', '#b91c1c', '#fee2e2'],   ['文具', '#065f46', '#d1fae5'],     ['金物', '#52525b', '#e4e4e7'],
+  ['青果', '#15803d', '#dcfce7'],   ['鮮魚', '#0e7490', '#cffafe'],     ['珈琲', '#6b3f1d', '#f5e6d3'],
+  ['甘味', '#db2777', '#fce7f3']
 ];
 const signCanvas = document.createElement('canvas');
 signCanvas.width = SIGN_COLS * SIGN_CW; signCanvas.height = SIGN_ROWS * SIGN_CH;
@@ -2156,7 +2171,7 @@ signCanvas.width = SIGN_COLS * SIGN_CW; signCanvas.height = SIGN_ROWS * SIGN_CH;
   });
 }
 // Horizontal signage: rooftop boards, flush wall panels and the rows of a tenant directory.
-const HS_COLS = 4, HS_ROWS = 8, HS_CW = 512, HS_CH = 128;
+const HS_COLS = 4, HS_ROWS = 12, HS_CW = 512, HS_CH = 128;
 const HS_WORDS = [
   ['居酒屋 大黒', '#c8102e', '#ffe8c0'],   ['24時間 営業中', '#111827', '#ffd24a'],
   ['カラオケ 歌広', '#e0197a', '#fff0f8'], ['らーめん 一番', '#f2c200', '#241400'],
@@ -2173,7 +2188,15 @@ const HS_WORDS = [
   ['銭湯 ゆ', '#0369a1', '#e0f2fe'],       ['串カツ 大将', '#f5a300', '#2a1a00'],
   ['生ビール 冷', '#eab308', '#1a1200'],   ['年中無休', '#1f6feb', '#eaf2ff'],
   ['地下一階 BAR', '#111827', '#c084fc'],  ['三階 麻雀', '#374151', '#e5e7eb'],
-  ['二階 居酒屋', '#7f1d1d', '#fecaca'],   ['四階 スナック', '#4c1d95', '#ddd6fe']
+  ['二階 居酒屋', '#7f1d1d', '#fecaca'],   ['四階 スナック', '#4c1d95', '#ddd6fe'],
+  ['たばこ 酒', '#374151', '#fde68a'],     ['そば処 更科', '#7c2d12', '#fed7aa'],
+  ['理髪 サカエ', '#b91c1c', '#fee2e2'],   ['時計 メガネ', '#0c4a6e', '#e0f2fe'],
+  ['印刷 名刺', '#334155', '#e2e8f0'],     ['靴 修理します', '#78350f', '#fde68a'],
+  ['青果 やおや', '#15803d', '#dcfce7'],   ['鮮魚 いさば', '#0e7490', '#cffafe'],
+  ['珈琲 深煎り', '#6b3f1d', '#f5e6d3'],   ['甘味 あんみつ', '#db2777', '#fce7f3'],
+  ['布団 打直し', '#0f766e', '#ccfbf1'],   ['金物 工具', '#52525b', '#e4e4e7'],
+  ['文具 事務用品', '#065f46', '#d1fae5'], ['米 配達します', '#a16207', '#fef3c7'],
+  ['洋品 紳士服', '#1e3a8a', '#dbeafe'],   ['花 いけばな', '#be123c', '#ffe4e6']
 ];
 const hsignCanvas = document.createElement('canvas');
 hsignCanvas.width = HS_COLS * HS_CW; hsignCanvas.height = HS_ROWS * HS_CH;
