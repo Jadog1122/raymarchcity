@@ -43,6 +43,8 @@
 - 改 shader 函数前先 grep 调用点：skyBase 同时是雾色，改天空会静默改全城远景。
 - 把某个 pass「关掉」做对照实验前，确认开关真的覆盖它的每一项（anamorphic streak 不乘 uBloomStr）。
 - 要保留表面细节的亮物体（月面、招牌字），峰值留在 bloom 阈值附近，超过就 clip 成一片白。
+- **每个里程碑结束前跑一次 `node tools/watch.mjs [秒] [间隔ms]`**：真实页面放歌抓帧 + 拼联系表。静帧 verify 证明不了「放着歌的时候好看」；音频驱动的效果在 test 模式下全是合成输入的取值。
+- 对照实验里两组数字**完全相同**＝开关没接上（参数取值不对、或被渲染循环每帧写回），不是「这个因素无关」。先证明开关有效再下结论。
 
 ## 播放器（M11）
 - `music/` 放 mp3；`node tools/scan-music.mjs` 生成 `music/manifest.json`（文件名解析歌手/曲名 + afinfo 量时长）。加 `--lyrics` 顺带检查歌词能否命中。
