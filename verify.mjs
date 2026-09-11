@@ -266,6 +266,39 @@ if (process.env.AB) {
   if (!(ab <= 2)) fails.push(`A/B ${ab.toFixed(2)}% > 2% (tracer disagrees with the reference)`);
 }
 
+// ---------- the offline bundle: the actual deliverable, opened the way it ships ----------
+// index.html over http is not what anyone receives. nightcity.html is a single 25 MB file with the
+// audio, the lyrics and three.js inlined, opened by double-clicking, and until now nothing checked
+// that it works — the one artifact that matters had no test at all.
+let bundleNote = 'skipped (no nightcity.html — run npm run bundle)';
+if (fs.existsSync('nightcity.html')) {
+  const c5 = await browser.newContext({ viewport: { width: 1280, height: 720 } });
+  const p5 = await c5.newPage();
+  const bad5 = [];
+  p5.on('pageerror', e => bad5.push(e.message));
+  await p5.goto(pathToFileURL(path.resolve('nightcity.html')).href);
+  await p5.waitForFunction(() => document.querySelectorAll('.track').length > 0, null, { timeout: 40000 }).catch(() => {});
+  const n = await p5.evaluate(() => document.querySelectorAll('.track').length);
+  if (bad5.length) bundleNote = 'pageerror: ' + bad5[0].slice(0, 80);
+  else if (!n) bundleNote = 'no tracks in the bundle';
+  else {
+    await p5.click('.track:nth-child(1)');
+    // The audio is a data: URI, so it has to decode before it can play at all.
+    await p5.waitForFunction(() => player.duration > 1 && player.currentTime > 0.3, null, { timeout: 30000 }).catch(() => {});
+    const st = await p5.evaluate(() => ({ d: player.duration || 0, t: player.currentTime || 0,
+      lyr: window.__lyrics ? window.__lyrics().length : 0, err: window.__stats.shaderError }));
+    if (st.err) bundleNote = 'shader error in the bundle: ' + st.err.slice(0, 60);
+    else if (!(st.d > 1)) bundleNote = 'bundled audio did not decode';
+    else if (!(st.t > 0.2)) bundleNote = 'bundled audio did not play';
+    else if (!(st.lyr > 3)) bundleNote = 'bundled lyrics missing (offline lookup is impossible)';
+    else bundleNote = `${n} tracks, ${st.d.toFixed(0)}s audio playing at ${st.t.toFixed(1)}s, ${st.lyr} lyric lines`;
+  }
+  await c5.close();
+  const mb = (fs.statSync('nightcity.html').size / 1048576).toFixed(1);
+  console.log(`bundle (file://): ${bundleNote}  [${mb} MB]`);
+  if (!/tracks,/.test(bundleNote)) fails.push('offline bundle: ' + bundleNote);
+} else console.log('bundle: ' + bundleNote);
+
 // ---------- recording throughput ----------
 let recFrames = -1;
 if (!NOREC) {
