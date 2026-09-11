@@ -2413,7 +2413,7 @@ const audio = {
   val:  { bass: 0, mid: 0, high: 0, energy: 0 },
   beat: 0, beatThreshold: 1.4, lastBeat: -1e9, bassHist: [], bassHistT: [],
   bins: null,
-  prevMag: null, flux: [], bpm: 0, bpmConf: 0, period: 0.5, section: 0, sectionAge: 0, sectionSince: 0, energy8: 0
+  prevMag: null, flux: [], bpm: 0, bpmConf: 0, period: 0.5, lastTempo: 0, bpmCand: [], section: 0, sectionAge: 0, sectionSince: 0, energy8: 0
 };
 window.__audio = audio;
 
@@ -2440,6 +2440,25 @@ function ensureCtx(){
   audio.freq = new Float32Array(audio.analyser.frequencyBinCount);
   audio.time = new Float32Array(audio.analyser.fftSize);
   bandBins();
+  startAudioClock();
+}
+// The analysis runs on its own clock, never on the render loop. Onset detection is a sampling problem:
+// at 12 fps the flux is sampled twelve times a second, and a 150 bpm pulse at 2.5 Hz is then barely
+// above Nyquist — so the tempo estimate fell apart exactly when the machine was already struggling,
+// and the same track read 154, then 106, then 143. Same rule as the lyrics: anything that follows the
+// media clock hangs off the media clock.
+let audioTimer = 0, audioLast = 0;
+let audioOut = { bass: 0, mid: 0, high: 0, energy: 0, beat: 0 };
+function startAudioClock(){
+  if (audioTimer) return;
+  audioLast = (performance.now() - t0) / 1000;
+  audioTimer = setInterval(() => {
+    if (!audio.analyser || audio.kind === 'none') return;
+    const now = (performance.now() - t0) / 1000, dt = now - audioLast;
+    if (dt <= 0) return;
+    audioLast = now;
+    audioOut = liveAudio(Math.min(0.1, dt), now);
+  }, 16);
 }
 function disconnectSource(){
   if (audio.source){ try { audio.source.disconnect(); } catch(e){} audio.source = null; }
@@ -2633,17 +2652,49 @@ function liveAudio(dt, nowSec){
   // spectral flux (onset strength) -> tempo by autocorrelation over the last 8 s -> beat grid
   { const N = 200; if (!audio.prevMag) audio.prevMag = new Float32Array(N);
     let fx = 0; for (let i = 1; i < N; i++){ const m = Math.pow(10, audio.freq[i] / 20); const d = m - audio.prevMag[i]; if (d > 0) fx += d; audio.prevMag[i] = m; }
-    audio.flux.push([nowSec, fx]); while (audio.flux.length && nowSec - audio.flux[0][0] > 8) audio.flux.shift();
-    if (audio.flux.length > 120 && (audio.flux.length % 30) === 0){          // every ~0.5 s: resample at 50 Hz and autocorrelate
+    audio.flux.push([nowSec, fx]); while (audio.flux.length && nowSec - audio.flux[0][0] > 12) audio.flux.shift();
+    // Every half second by the clock. This used to be `flux.length % 30 === 0`, and once the ring
+    // buffer reached its steady length it parked on a multiple of 30 and ran the autocorrelation on
+    // almost every frame instead — invisible, but it was costing frames the whole time.
+    if (audio.flux.length > 120 && nowSec - audio.lastTempo > 0.5){
+      audio.lastTempo = nowSec;
+      // Resample with interpolation, not by holding: the flux arrives at whatever the frame rate happens
+      // to be (28-60 Hz here, and it moves), and a nearest-neighbour hold turns that into a staircase
+      // whose steps beat against the tempo. Then a 3-tap smooth, because a single spiky frame is noise.
       const t0f = audio.flux[0][0], span = nowSec - t0f, n = Math.floor(span * 50), env = new Float32Array(n); let k = 0;
-      for (let i = 0; i < n; i++){ const tt = t0f + i / 50; while (k < audio.flux.length - 1 && audio.flux[k + 1][0] <= tt) k++; env[i] = audio.flux[k][1]; }
+      for (let i = 0; i < n; i++){ const tt = t0f + i / 50;
+        while (k < audio.flux.length - 2 && audio.flux[k + 1][0] <= tt) k++;
+        const a = audio.flux[k], b = audio.flux[Math.min(k + 1, audio.flux.length - 1)];
+        const w = b[0] > a[0] ? Math.min(1, Math.max(0, (tt - a[0]) / (b[0] - a[0]))) : 0;
+        env[i] = a[1] + (b[1] - a[1]) * w; }
+      for (let i = 1; i < n - 1; i++) env[i] = 0.25*env[i-1] + 0.5*env[i] + 0.25*env[i+1];
       let mean = 0; for (const v of env) mean += v; mean /= n; for (let i = 0; i < n; i++) env[i] -= mean;
-      let best = 0, bestLag = 0, e0 = 1e-9; for (let i = 0; i < n; i++) e0 += env[i]*env[i];
-      for (let lag = 15; lag <= 50; lag++){ let c = 0; for (let i = lag; i < n; i++) c += env[i]*env[i - lag]; c /= e0; if (c > best){ best = c; bestLag = lag; } }
-      if (bestLag){
-        const ac = lag => { let c = 0; for (let i = lag; i < n; i++) c += env[i]*env[i - lag]; return c / e0; };
-        const ym = ac(bestLag - 1), yp = ac(bestLag + 1), den = ym - 2*best + yp; const off = Math.abs(den) > 1e-9 ? 0.5*(ym - yp)/den : 0;   // parabolic peak
-        const bpm = 60 * 50 / (bestLag + off); audio.bpm = audio.bpm ? audio.bpm*0.7 + bpm*0.3 : bpm; audio.period = 60 / audio.bpm; audio.bpmConf = best; }
+      // Normalise each lag by its *own* overlap. Dividing every lag by the whole signal's energy gives
+      // short lags more terms to sum and therefore a systematically larger score, which is exactly why
+      // this kept reporting double time (153 for a 76 bpm track, and 245 before it settled).
+      const ac = lag => { let c = 0, a2 = 1e-9, b2 = 1e-9;
+        for (let i = lag; i < n; i++){ c += env[i]*env[i - lag]; a2 += env[i]*env[i]; b2 += env[i - lag]*env[i - lag]; }
+        return c / Math.sqrt(a2 * b2); };
+      // and a tempo prior, so an octave above or below has to be clearly better to win rather than
+      // merely equal — autocorrelation cannot tell 76 from 152 on its own, only preference can.
+      const prior = lag => { const x = Math.log2(60 * 50 / lag / 105); return Math.exp(-x*x / (2*0.5*0.5)); };
+      let best = -1, bestLag = 0, bestRaw = 0;
+      for (let lag = 17; lag <= 85; lag++){ const raw = ac(lag), sc = raw * prior(lag); if (sc > best){ best = sc; bestLag = lag; bestRaw = raw; } }
+      if (bestLag > 17 && bestLag < 85){
+        const ym = ac(bestLag - 1), yp = ac(bestLag + 1), den = ym - 2*bestRaw + yp; const off = Math.abs(den) > 1e-9 ? 0.5*(ym - yp)/den : 0;   // parabolic peak
+        const cand = 60 * 50 / (bestLag + off);
+        audio.bpmCand.push(cand); if (audio.bpmCand.length > 7) audio.bpmCand.shift();
+        const sorted = audio.bpmCand.slice().sort((x, y) => x - y), med = sorted[sorted.length >> 1];
+        const support = audio.bpmCand.reduce((c, v) => c + (Math.abs(v / med - 1) < 0.04 ? 1 : 0), 0);
+        // Never smooth across an octave — averaging 76 and 153 gives 115, which is neither — and never
+        // change tempo on one estimate. A single strong half-second is a fill or a key change, not a
+        // new tempo, and acting on it throws away the beat grid's phase. Several in a row have to agree.
+        if (!audio.bpm){ if (audio.bpmCand.length >= 3){ audio.bpm = med; audio.bpmConf = bestRaw; } }
+        else { const r = med / audio.bpm;
+          if (r > 0.96 && r < 1.04){ audio.bpm = audio.bpm*0.85 + med*0.15; audio.bpmConf = Math.max(audio.bpmConf*0.95, bestRaw); }
+          else if (support >= 4 && bestRaw > 0.18){ audio.bpm = med; audio.bpmConf = bestRaw; }
+          else audio.bpmConf *= 0.99; }
+        audio.period = 60 / Math.max(audio.bpm, 1); }
     }
   }
   // beat: raw bass vs its 1 s sliding mean
@@ -2652,24 +2703,37 @@ function liveAudio(dt, nowSec){
   const mean = audio.bassHist.reduce((a, b) => a + b, 0) / audio.bassHist.length;
   if (raw.bass > audio.beatThreshold*mean && raw.bass > 1e-4 && nowSec - audio.lastBeat > 0.2){
     let bt = nowSec;
-    if (audio.bpmConf > 0.35 && beatTimes[0] > 0){ const k = Math.round((nowSec - beatTimes[0]) / audio.period); const pred = beatTimes[0] + k*audio.period; if (k >= 1 && Math.abs(pred - nowSec) < 0.08) bt = pred; }   // phase-lock to the tempo grid
+    if (audio.bpmConf > 0.15 && beatTimes[0] > 0){ const k = Math.round((nowSec - beatTimes[0]) / audio.period); const pred = beatTimes[0] + k*audio.period; if (k >= 1 && Math.abs(pred - nowSec) < 0.09) bt = pred; }   // phase-lock to the tempo grid
     audio.beat = 1; audio.lastBeat = bt; beatTimes.unshift(bt); beatTimes.length = 2;
     beatCount++;
     // phrase level: a 'drop' = energy of the last second clearly above the 3 s before it, on a beat
     let r = 0, rn = 0, pv = 0, pn = 0;
-    for (const [tt, e] of energyHist){ if (nowSec - tt < 1.0){ r += e; rn++; } else { pv += e; pn++; } }
+    for (const [tt, e] of energyHist){ const a = nowSec - tt; if (a < 1.0){ r += e; rn++; } else if (a < 4.0){ pv += e; pn++; } }
     const recent = rn ? r/rn : 0, prev = pn ? pv/pn : 0;
     if (recent > prev*1.25 && recent > 0.45 && nowSec - dropTime > 6){ dropTime = nowSec; flashTime = nowSec; }
     else if (nowSec - flashTime > 25) flashTime = nowSec;                    // quiet tracks still get one now and then
   }
+  // A missed onset should not leave a hole in the edit: when the tempo is solid, the grid fills it in.
+  if (audio.bpmConf > 0.18 && beatTimes[0] > 0 && nowSec - audio.lastBeat > audio.period*1.55){
+    const k = Math.round((nowSec - beatTimes[0]) / audio.period), pred = beatTimes[0] + k*audio.period;
+    if (k >= 1 && pred <= nowSec && nowSec - pred < 0.07){
+      audio.beat = Math.max(audio.beat, 0.65); audio.lastBeat = pred; beatTimes.unshift(pred); beatTimes.length = 2; beatCount++; }
+  }
   energyHist.push([nowSec, audio.val.energy]);
-  while (energyHist.length && nowSec - energyHist[0][0] > 4.0) energyHist.shift();
-  // sections: 0 verse, 1 build (rising), 2 drop (loud, after a drop), 3 breakdown (quiet); min 4 s per state
-  { let e8 = 0; for (const [, e] of energyHist) e8 += e; e8 /= Math.max(1, energyHist.length); audio.energy8 = e8;
-    let r = 0, rn = 0, pv = 0, pn = 0; for (const [tt, e] of energyHist){ if (nowSec - tt < 1.5){ r += e; rn++; } else { pv += e; pn++; } }
-    const rising = rn && pn && (r/rn) > (pv/pn)*1.15;
-    let want = e8 < 0.3 ? 3 : (nowSec - dropTime < 8 ? 2 : (rising && e8 > 0.4 ? 1 : 0));
-    if (want !== audio.section && nowSec - audio.sectionSince > 4){ audio.section = want; audio.sectionSince = nowSec; }
+  while (energyHist.length && nowSec - energyHist[0][0] > 30.0) energyHist.shift();
+  // Sections: 0 verse, 1 build (rising), 2 drop (loud, after a drop), 3 breakdown (quiet).
+  // Judged against the track's own level over the last half minute, not against the last four seconds:
+  // a four-second baseline follows the music instead of describing it, and the state flipped every few
+  // seconds — which read as the edit reacting to loudness rather than to structure.
+  { let e8 = 0, e8n = 0, base = 0, bn = 0;
+    for (const [tt, e] of energyHist){ const a = nowSec - tt; if (a < 6.0){ e8 += e; e8n++; } base += e; bn++; }
+    e8 = e8n ? e8/e8n : 0; base = bn ? base/bn : 0; audio.energy8 = e8;
+    let r = 0, rn = 0, pv = 0, pn = 0;
+    for (const [tt, e] of energyHist){ const a = nowSec - tt; if (a < 2.0){ r += e; rn++; } else if (a < 7.0){ pv += e; pn++; } }
+    const rising = rn && pn && (r/rn) > (pv/pn)*1.12;
+    const quiet = base > 1e-4 ? e8 < base*0.72 : e8 < 0.3;
+    let want = quiet ? 3 : (nowSec - dropTime < 10 ? 2 : (rising && e8 > base*1.05 ? 1 : 0));
+    if (want !== audio.section && nowSec - audio.sectionSince > 8){ audio.section = want; audio.sectionSince = nowSec; }
     audio.sectionAge = nowSec - audio.sectionSince; }
   audio.beat *= Math.exp(-8*dt);
   // adaptive gain (sliding max with slow decay) + asymmetric smoothing
@@ -2683,7 +2747,7 @@ function liveAudio(dt, nowSec){
 }
 function currentAudio(t, dt){
   if (TEST) return syntheticAudio(t);
-  if (audio.analyser && audio.kind !== 'none') return liveAudio(dt, t);
+  if (audio.analyser && audio.kind !== 'none') return audioOut;
   const s = syntheticAudio(t*0.5);   // idle: gentle breathing before any input
   return { bass: s.bass*0.25, mid: s.mid*0.25, high: s.high*0.2, energy: s.energy*0.25, beat: 0 };
 }
