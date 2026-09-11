@@ -1440,7 +1440,26 @@ float rain(vec2 frag, float t){
 
 void main(){
   vec2 uv = gl_FragCoord.xy / uRes;
-  if (uMode == 2){ fragColor = texture(tHistory, uv); return; }   // final blit of the blended frame
+  if (uMode == 2){
+    // Screen-resolution finish. Everything above runs at the render resolution, so dropping renderScale
+    // actually buys frame time; only these cheap, resolution-native touches stay at full size.
+    vec2 wv = uv + (vec2(hash21(vec2(uFrame, 1.0)), hash21(vec2(uFrame, 2.0))) - 0.5) * 0.7 / uRes;   // gate weave
+    vec3 col = texture(tHistory, wv).rgb;
+    { vec4 tx = texture(tText, uv); col = mix(col, tx.rgb, tx.a); }    // title and lyrics, printed into the frame
+    float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
+    vec2 gf = gl_FragCoord.xy + vec2(uFrame*7.31, uFrame*3.17);
+    float g1 = hash21(gf) - 0.5, g2 = hash21(floor(gf*0.5) + 11.0) - 0.5, g3 = hash21(floor(gf*0.25) + 23.0) - 0.5;
+    float gl = 0.6*g1 + 0.3*g2 + 0.1*g3;
+    vec3 gc = vec3(hash21(gf + 31.0), hash21(gf + 47.0), hash21(gf + 59.0)) - 0.5;
+    col += (gl + 0.35*gc) * 0.055 * mix(0.9, 0.35, lum);
+    col *= 1.0 + 0.012*(hash21(vec2(uFrame, 3.0)) - 0.5);              // gate flicker
+    float barH = max(0.0, (uRes.y - uRes.x / 2.39) * 0.5);             // 2.39:1 letterbox
+    if (gl_FragCoord.y < barH || gl_FragCoord.y > uRes.y - barH) col = vec3(0.0);
+    col *= uMood.w;                                                    // fade in / out
+    if (any(isnan(col)) || any(isinf(col))) col = vec3(1.0, 0.0, 1.0);
+    fragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
+    return;
+  }
   if (uMode == 3){                                                   // TAA: reproject last frame through the previous camera, clamp, blend
     vec4 cur = texture(tScene, uv);
     if (uTaa < 0.5){ fragColor = cur; return; }
@@ -1475,7 +1494,6 @@ void main(){
     fragColor = vec4(c * k, 1.0);
     return;
   }
-  uv += (vec2(hash21(vec2(uFrame, 1.0)), hash21(vec2(uFrame, 2.0))) - 0.5) * 0.7 / uRes;   // gate weave: the frame drifts by a fraction of a pixel
   vec2 cv = uv - 0.5;
   float r = length(cv) / 0.7071;
   vec2 off = cv * r * r * (0.6 / uRes);                      // chromatic aberration, 0.6 px, corners only
@@ -1549,22 +1567,6 @@ void main(){
     if (lift > 0.0) col = clamp((col - lift) * gain, 0.0, 1.0);
   }
   col = mix(col, texture(tHistory, uv).rgb, uBlend);            // temporal blend: a little motion blur, calmer edges
-  { vec4 tx = texture(tText, uv); col = mix(col, tx.rgb, tx.a); }        // title + lyrics, printed into the frame before the grain
-  // film grain: three octaves with a little chroma, stronger in the shadows; plus 1 % gate flicker
-  float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
-  vec2 gf = gl_FragCoord.xy + vec2(uFrame*7.31, uFrame*3.17);
-  float g1 = hash21(gf) - 0.5, g2 = hash21(floor(gf*0.5) + 11.0) - 0.5, g3 = hash21(floor(gf*0.25) + 23.0) - 0.5;
-  float gl = 0.6*g1 + 0.3*g2 + 0.1*g3;
-  vec3 gc = vec3(hash21(gf + 31.0), hash21(gf + 47.0), hash21(gf + 59.0)) - 0.5;
-  float cocG = clamp(abs(texture(tScene, uv).a * 320.0 - uFocus) / max(uFocus, 1.0) * uAperture, 0.0, 7.0);
-  float grainAmt = mix(0.9, 0.35, lum) * mix(1.0, 0.4, smoothstep(0.6, 3.0, cocG));   // defocused areas carry no detail; full grain there reads as dirt
-  col += (gl + 0.35*gc) * 0.055 * grainAmt;
-  col *= 1.0 + 0.012*(hash21(vec2(uFrame, 3.0)) - 0.5);
-  // vignette
-  // 2.39:1 letterbox
-  float barH = max(0.0, (uRes.y - uRes.x / 2.39) * 0.5);
-  if (gl_FragCoord.y < barH || gl_FragCoord.y > uRes.y - barH) col = vec3(0.0);
-  col *= uMood.w;                                                     // fade in / out
   if (any(isnan(col)) || any(isinf(col))) col = vec3(1.0, 0.0, 1.0);
   fragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
 }
@@ -1839,7 +1841,7 @@ function resize(){
   uniforms.iResolution.value.set(rw, rh);
   postU.uBrightRes.value.set(bw, bh);
   postU.uSceneRes.value.set(rw, rh);
-  rtHist[0].setSize(w, h); rtHist[1].setSize(w, h);
+  rtHist[0].setSize(rw, rh); rtHist[1].setSize(rw, rh);   // the composite runs at render resolution now
   rtTaa[0].setSize(rw, rh); rtTaa[1].setSize(rw, rh);
   stats.rtW = rw; stats.rtH = rh; stats.renderScale = renderScale; uniforms.uScale.value = renderScale;
 }
@@ -2302,12 +2304,13 @@ function renderFrame(now){
   postU.uMode.value = 0; postU.uRes.value.set(rtBright.width, rtBright.height);
   renderer.setRenderTarget(rtBright);
   renderer.render(scenePost, cam);                 // bright extraction (+ auto mipmaps)
-  postU.uMode.value = 1; postU.uRes.value.set(window.innerWidth, window.innerHeight);
+  postU.uMode.value = 1; postU.uRes.value.set(rt.width, rt.height);
   postU.tHistory.value = rtHist[1 - histCur].texture;
   postU.uBlend.value = (TEST && !params.get('taa') && !REC) ? 0 : (cutFrames > 0 ? 0 : 0.08);
   renderer.setRenderTarget(rtHist[histCur]);
   renderer.render(scenePost, cam);                 // composite, blended with the previous frame
-  postU.uMode.value = 2; postU.tHistory.value = rtHist[histCur].texture;
+  postU.uMode.value = 2; postU.uRes.value.set(window.innerWidth, window.innerHeight);
+  postU.tHistory.value = rtHist[histCur].texture;
   renderer.setRenderTarget(null);
   renderer.render(scenePost, cam);                 // to screen
   histCur = 1 - histCur;
