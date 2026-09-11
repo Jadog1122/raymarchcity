@@ -1023,8 +1023,13 @@ float traceDDA(vec3 ro, vec3 rd, float tmax){
   return best < tmax ? best : -1.0;
 }
 
+// The reference sphere-trace and everything that only it needs — map(), and through map() the whole
+// exact SDF — are compiled in only when the A/B check asks for them. A uniform branch is not enough:
+// the compiler has to keep both sides, and the exact SDF is the largest function in the shader, so
+// merely *mentioning* it costs registers and therefore occupancy on every pixel that never runs it.
 vec2 raymarch(vec3 ro, vec3 rd){
   if (uPath > 0.5){ float t = traceDDA(ro, rd, MAXD); gMat = gHitMat; return vec2(t, 1.0); }   // the tracer reports the material; map() is not needed at all on this path
+#ifdef REF_PATH
   float t = 0.0;
   for (int i = 0; i < 72; i++){
     vec3 p = ro + rd*t;
@@ -1034,15 +1039,21 @@ vec2 raymarch(vec3 ro, vec3 rd){
     t += d;
     if (t > MAXD) return vec2(-1.0, float(i));
   }
+#endif
   return vec2(-1.0, 72.0);
 }
 
+#ifdef REF_PATH
 vec3 calcNormal(vec3 p){
   const float e = 0.0015; const vec2 k = vec2(1.0, -1.0);
   vec3 n = k.xyy*map(p + k.xyy*e) + k.yyx*map(p + k.yyx*e) + k.yxy*map(p + k.yxy*e) + k.xxx*map(p + k.xxx*e);
   float l = length(n);
   return l > 1e-6 ? n / l : vec3(0.0, 1.0, 0.0);
 }
+#define REF_NORMAL(p, fb) (uPath > 0.5 ? (fb) : calcNormal(p))
+#else
+#define REF_NORMAL(p, fb) (fb)
+#endif
 
 float calcAO(vec3 p, vec3 n){
   float occ = 0.0, sca = 1.0;
@@ -1937,7 +1948,7 @@ vec3 render(vec3 ro, vec3 rd, vec2 uv){
     float t = h.x;
     vec3 p = ro + rd*t;
     int mat = gMat;                       // read before anything else touches the globals
-    vec3 n = uPath > 0.5 ? gHitN : calcNormal(p);   // the reference sphere-trace has no face to report
+    vec3 n = REF_NORMAL(p, gHitN);        // the reference sphere-trace has no face to report
     col = shade(p, n, rd, t, mat, false);
     if (mat == 2){                        // wet ground: one bounce, no AO / volumetrics
       float rmw = mod(floor(p.z / CELL), 7.0);
@@ -1963,17 +1974,19 @@ vec3 render(vec3 ro, vec3 rd, vec2 uv){
       vec3 rn2 = vec3(0.0, 1.0, 0.0);
       int gm2 = 2;
       if (uPath > 0.5){ hit = traceDDA(rp, rr, 160.0); rn2 = gHitN; gm2 = gHitMat; }
+#ifdef REF_PATH
       else for (int i = 0; i < 10; i++){
         float d = map(rp + rr*t2);
         if (d < 0.002*t2 + 0.001){ hit = t2; break; }
         t2 += d;
         if (t2 > 160.0) break;
       }
+#endif
       vec3 refl = skyColor(rr);
       if (hit > 0.0){
         int m2 = uPath > 0.5 ? gm2 : gMat;
         vec3 q = rp + rr*hit;
-        refl = shade(q, uPath > 0.5 ? rn2 : calcNormal(q), rr, hit + t, m2, true);
+        refl = shade(q, REF_NORMAL(q, rn2), rr, hit + t, m2, true);
       }
       float c = max(dot(-rd, n), 0.0);
       float fres = 0.04 + 0.96*pow(1.0 - c, 5.0);
@@ -2510,6 +2523,8 @@ let camZ = 0;
 const vert = document.getElementById('vert').textContent;
 const mainMat = new THREE.RawShaderMaterial({
   glslVersion: THREE.GLSL3, uniforms,
+  // The exact SDF is compiled in only for the A/B check that needs it.
+  defines: params.get('path') === '0' ? { REF_PATH: 1 } : {},
   vertexShader: vert, fragmentShader: document.getElementById('frag').textContent,
   depthTest: false, depthWrite: false
 });
