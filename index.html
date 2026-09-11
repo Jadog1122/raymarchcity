@@ -3080,7 +3080,13 @@ function renderFrame(now){
   if (taaOn) uniforms.uJitter.value.set(halton(jitterIdx + 1, 2) - 0.5, halton(jitterIdx + 1, 3) - 0.5); else uniforms.uJitter.value.set(0, 0);
   postU.uTaa.value = taaOn ? 1 : 0;
   postU.uRig.value = rig;
-  { const FOCUS = [60, 9, 26, 90], APER = [1.4, 1.6, 2.0, 1.8];
+  // Focus and aperture. These were a macro lens: the street rig was sharp only between 8.0 and
+  // 10.5 m, and what sits at 9 m is usually empty road — so the buildings, the signs and the street
+  // itself were all outside the depth of field at once, which is what "everything is out of focus"
+  // means. Measured on the frame: the far zone lost 30% of its detail to this alone. Now each rig is
+  // sharp across the distances its shot is actually about, with enough left at the extremes to keep
+  // the near foreground soft and distant lights blooming.
+  { const FOCUS = [110, 38, 48, 150], APER = [0.40, 0.32, 0.42, 0.45];
     const age = t - shotStart, pull = TEST ? 1 : Math.min(1, age / 0.6);
     const f = FOCUS[rig] * (0.35 + 0.65 * pull*pull*(3 - 2*pull));                  // focus pull after a cut
     postU.uFocus.value = f; postU.uAperture.value = APER[rig]; }
