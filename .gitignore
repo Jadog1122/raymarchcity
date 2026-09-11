@@ -6,3 +6,7 @@ tools/Lyrics.app/Contents/MacOS/lyrics
 # the audio itself stays out of the repo; the manifest that lists it does not
 music/*
 !music/manifest.json
+
+# the self-contained build carries the audio; never commit it
+nightcity.html
+vendor/

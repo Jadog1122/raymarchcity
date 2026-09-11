@@ -53,3 +53,9 @@
 - 录屏帧数和 fps 同属吞吐量测量，FPS_SOFT 下只报告不失败。
 - 调了三轮参数没进展时，问的不该是「参数对不对」而是「表达这个东西的渠道选对了吗」（玻璃靠开窗方式读，不靠反射强度）。
 - 面积类指标超标先分清是数量多还是单个太亮/太大，修法相反。
+
+## 离线交付（M14）
+- `npm run scan` 生成 music/manifest.json；`npm run lyrics` 把逐行歌词取到 music/*.lrc（页面走 http 时优先读它，不再联网）。
+- `npm run bundle` 产出 `nightcity.html`：把两首歌（base64 data URI）、歌词和 three.js 全部内嵌。**双击即可离线播放并显示歌词**。
+- 为什么必须内嵌：Chrome 给每个 file:// 文档独立的不透明源，双击打开的页面读不到同目录的 mp3——fetch 和 `<audio>` 都不行。
+- `nightcity.html` 和 `music/` 里的音频都不进仓库（.gitignore）。

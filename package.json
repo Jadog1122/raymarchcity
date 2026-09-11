@@ -4,7 +4,10 @@
   "main": "index.js",
   "scripts": {
     "verify": "node verify.mjs",
-    "serve": "node tools/serve.mjs 5173"
+    "serve": "node tools/serve.mjs 5173",
+    "lyrics": "node tools/fetch-lyrics.mjs",
+    "bundle": "node tools/bundle.mjs",
+    "scan": "node tools/scan-music.mjs"
   },
   "keywords": [],
   "author": "",

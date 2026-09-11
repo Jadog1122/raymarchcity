@@ -2017,11 +2017,23 @@ async function addFile(file, { play = true } = {}){
 }
 async function loadLibrary(){
   LIB.db = await openDB();
+  if (window.__BUNDLE){                                     // self-contained build: audio and lyrics travel with the page
+    for (const m of window.__BUNDLE.tracks || []){
+      const t = { artist: m.artist, title: m.title, duration: m.duration, url: m.audio, lrc: m.lrc || null, source: 'bundle' };
+      t.id = trackId(t); if (!LIB.tracks.some(x => x.id === t.id)) LIB.tracks.push(t);
+    }
+  }
   try {                                                     // when served over http: the manifest of the music/ folder
     const r = await fetch('music/manifest.json', { cache: 'no-store' });
     if (r.ok) for (const m of (await r.json()).tracks || []){
       const t = { artist: m.artist, title: m.title, duration: m.duration, url: 'music/' + encodeURIComponent(m.file), source: 'folder' };
-      t.id = trackId(t); if (!LIB.tracks.some(x => x.id === t.id)) LIB.tracks.push(t);
+      t.id = trackId(t);
+      if (LIB.tracks.some(x => x.id === t.id)) continue;
+      LIB.tracks.push(t);
+      const lrcUrl = 'music/' + encodeURIComponent(m.file.replace(/\.[^.]+$/, '.lrc'));
+      fetch(lrcUrl).then(x => x.ok ? x.text() : null).then(txt => {            // lyrics cached beside the audio: no network needed
+        if (txt && /\[\d+:/.test(txt)){ t.lrc = txt; idbPut('lyrics', { id: t.id, lrc: txt, at: Date.now() }); renderPicker(); }
+      }).catch(() => {});
     }
   } catch {}
   for (const rec of await idbAll('tracks')){                 // files dropped in earlier sessions
