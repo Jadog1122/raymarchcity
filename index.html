@@ -137,8 +137,10 @@ float cnoise(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*f*(f*(f*6.0 - 15.
 #define STREET 2.0     // half street width
 #define MAXD   320.0
 int gMat = 0;          // 1 building, 2 ground
-float gHitT = 1e9;                   // the analytic tracer records the face it hit as it goes, so the
-vec3  gHitN = vec3(0.0, 1.0, 0.0);   // shader never has to rediscover it with a gradient of the SDF
+float gHitT = 1e9;                   // the tracer records the face it hit and what that face is made
+vec3  gHitN = vec3(0.0, 1.0, 0.0);   // of, as it goes, so the shader never has to rediscover either by
+int   gHitMat = 1;                   // evaluating the exact SDF all over again.
+int   gPendMat = 1;                  // what the primitives about to be tested are made of
 float gDepth = 0.0;    // hit distance of the primary ray (MAXD if sky)
 vec3  gRo = vec3(0.0);  // camera position (for cloud projection)
 
@@ -220,7 +222,7 @@ float hitSphere(vec3 ro, vec3 rd, vec3 c, float r, float tCur, float tLim){
   float t = -b - sqrt(disc);
   if (t < tCur) t = -b + sqrt(disc);
   if (!(t > tCur && t < tLim)) return 1e9;
-  if (t < gHitT){ gHitT = t; gHitN = normalize(ro + rd*t - c); }
+  if (t < gHitT){ gHitT = t; gHitMat = gPendMat; gHitN = normalize(ro + rd*t - c); }
   return t;
 }
 float hitCylY(vec3 ro, vec3 rd, vec2 c, float r, float y0, float y1, float tCur, float tLim){
@@ -242,7 +244,7 @@ float hitCylY(vec3 ro, vec3 rd, vec2 c, float r, float y0, float y1, float tCur,
     if (t > tCur && t < tLim && t < best){ vec2 pp = ro.xz + rd.xz*t - c; if (dot(pp, pp) < r*r){ best = t; kind = k + 1; } }
   }
   if (kind >= 0 && best < gHitT){
-    gHitT = best;
+    gHitT = best; gHitMat = gPendMat;
     if (kind == 0){ vec2 pp = ro.xz + rd.xz*best - c; gHitN = normalize(vec3(pp.x, 0.0, pp.y)); }
     else gHitN = vec3(0.0, kind == 1 ? -1.0 : 1.0, 0.0);
   }
@@ -777,7 +779,7 @@ float hitBox(vec3 ro, vec3 rd, vec3 bmin, vec3 bmax, float tCur, float tLim){
   if (!(tn < tf && tn < tLim && tf > tCur)) return 1e9;
   float t = max(tn, tCur);
   if (t < gHitT){
-    gHitT = t;
+    gHitT = t; gHitMat = gPendMat;
     vec3 sN = step(vec3(tn - 1e-5), tm) * -sign(rd);    // the slab entered last is the face we are on
     float l = length(sN);
     gHitN = l > 1e-6 ? sN / l : vec3(0.0, 1.0, 0.0);
@@ -787,15 +789,16 @@ float hitBox(vec3 ro, vec3 rd, vec3 bmin, vec3 bmax, float tCur, float tLim){
 float traceDDA(vec3 ro, vec3 rd, float tmax){
   rd.x = abs(rd.x) < 1e-5 ? 1e-5 : rd.x; rd.z = abs(rd.z) < 1e-5 ? 1e-5 : rd.z; rd.y = abs(rd.y) < 1e-6 ? 1e-6 : rd.y;
   float best = tmax;
-  gHitT = 1e9; gHitN = vec3(0.0, 1.0, 0.0);
-  if (rd.y < 0.0){ float tg = -ro.y / rd.y; if (tg < best){ best = tg; gHitT = tg; gHitN = vec3(0.0, 1.0, 0.0); } }   // ground plane
+  gHitT = 1e9; gHitN = vec3(0.0, 1.0, 0.0); gHitMat = 2; gPendMat = 2;
+  if (rd.y < 0.0){ float tg = -ro.y / rd.y; if (tg < best){ best = tg; gHitT = tg; gHitMat = 2; gHitN = vec3(0.0, 1.0, 0.0); } }   // ground plane
   { // landmark tower: tiers, spire, beacon
     vec3 T = towerPos();
-    float t;
+    float t; gPendMat = 5;
     t = hitBox(ro, rd, T + vec3(-4.2, 0.0, -4.2), T + vec3(4.2, TOWER_H*0.5, 4.2), 0.0, best); best = min(best, t);
     t = hitBox(ro, rd, T + vec3(-3.0, 0.0, -3.0), T + vec3(3.0, TOWER_H*0.72, 3.0), 0.0, best); best = min(best, t);
     t = hitBox(ro, rd, T + vec3(-1.9, 0.0, -1.9), T + vec3(1.9, TOWER_H, 1.9), 0.0, best); best = min(best, t);
     t = hitBox(ro, rd, T + vec3(-0.22, TOWER_H, -0.22), T + vec3(0.22, TOWER_H + 14.0, 0.22), 0.0, best); best = min(best, t);
+    gPendMat = 3;
     t = hitBox(ro, rd, T + vec3(-0.35, TOWER_H + 13.65, -0.35), T + vec3(0.35, TOWER_H + 14.35, 0.35), 0.0, best); best = min(best, t);
   }
   vec2 cell = floor(ro.xz / CELL);
@@ -810,19 +813,23 @@ float traceDDA(vec3 ro, vec3 rd, float tmax){
       float yIn2 = ro.y + rd.y*tCur, yOut2 = ro.y + rd.y*tLim;
       float yLo2 = min(yIn2, yOut2), yHi2 = max(yIn2, yOut2);
       float zcr = (cell.y + 0.5)*CELL;
+      gPendMat = 2;
       if (yLo2 < 1.6){                                             // bridges carrying the streets, and the bank parapet
         for (int k = 0; k < 2; k++){
           float kx = cell.x + float(k), hw = streetHalf(kx);
           best = min(best, hitBox(ro, rd, vec3(kx*CELL - hw, 0.0, zcr - CELL*0.5), vec3(kx*CELL + hw, 0.60, zcr + CELL*0.5), tCur, tLim));
           for (int sg = 0; sg < 2; sg++){
             float xr = kx*CELL + (sg == 0 ? -1.0 : 1.0)*(hw - 0.10);
+            gPendMat = 7;
             best = min(best, hitBox(ro, rd, vec3(xr - 0.10, 0.57, zcr - CELL*0.5), vec3(xr + 0.10, 1.13, zcr + CELL*0.5), tCur, tLim));
+            gPendMat = 2;
           }
         }
         float rowm = mod(cell.y, 7.0);
         float zEdge = (rowm == 3.0 ? cell.y*CELL : (cell.y + 1.0)*CELL);
         best = min(best, hitBox(ro, rd, vec3(cell.x*CELL, 0.0, zEdge - 0.22), vec3((cell.x + 1.0)*CELL, 0.84, zEdge + 0.22), tCur, tLim));
       }
+      gPendMat = 7;
       if (viaductRow(cell.y) && yHi2 > 0.0){
         float cxm = (cell.x + 0.5)*CELL, pxv = cell.x*CELL;
         best = min(best, hitBox(ro, rd, vec3(cxm - CELL*0.5, VIA_Y - VIA_HT, zcr - VIA_HZ), vec3(cxm + CELL*0.5, VIA_Y + VIA_HT, zcr + VIA_HZ), tCur, tLim));
@@ -835,7 +842,9 @@ float traceDDA(vec3 ro, vec3 rd, float tmax){
       float yLo = min(yIn, yOut), yHi = max(yIn, yOut);
       float sh = CELL*0.5 - 1.55, scx, shx; lotSpanX(cell, scx, shx);
       if (plazaAt(cell)){ sh = CELL*0.5 - 0.4; shx += 0.7; }      // the square is paved edge to edge
+      gPendMat = 2;
       if (yLo < 0.13) best = min(best, hitBox(ro, rd, vec3(scx - shx, -0.01, c.y - sh), vec3(scx + shx, 0.12, c.y + sh), tCur, tLim));   // sidewalk slab
+      gPendMat = 1;
       vec2 hs; float ht; cellParams(cell, hs, ht); vec2 off = lotOffset(cell, hs);
       vec2 bc = c + off;
       float h = hash21(cell);
@@ -843,6 +852,7 @@ float traceDDA(vec3 ro, vec3 rd, float tmax){
       // one conservative bound for the whole lot (building + canopy + pipes + roof clutter).
       // Rays travelling down a street pass most blocks without touching them; rejecting those with a
       // single box test instead of a dozen primitive tests is the difference between 120 ms and 15 ms.
+      gPendMat = 1;
       if (stationAt(cell)){                                       // concourse hall
         float cxs, hxs; lotSpanX(cell, cxs, hxs);
         float zcs = (cell.y + 0.5)*CELL;
@@ -851,6 +861,7 @@ float traceDDA(vec3 ro, vec3 rd, float tmax){
       if (!stationAt(cell) && !plazaAt(cell)){
       vec2 lotB = boxHit(ro, rd, vec3(bc.x - hs.x - 0.85, -0.05, bc.y - hs.y - 0.6), vec3(bc.x + hs.x + 0.85, ht + 8.0, bc.y + hs.y + 0.6));
       if (lotB.x < lotB.y && lotB.x < tLim && lotB.y > tCur){
+        gPendMat = 1;
         if (arch == 5){                                           // setback tower: three nested tiers + antenna + beacon
           best = min(best, hitBox(ro, rd, vec3(bc.x - hs.x, 0.0, bc.y - hs.y), vec3(bc.x + hs.x, ht*0.6, bc.y + hs.y), tCur, tLim));
           best = min(best, hitBox(ro, rd, vec3(bc.x - hs.x*0.72, 0.0, bc.y - hs.y*0.72), vec3(bc.x + hs.x*0.72, ht*0.8, bc.y + hs.y*0.72), tCur, tLim));
@@ -858,7 +869,9 @@ float traceDDA(vec3 ro, vec3 rd, float tmax){
           if (yHi > ht - 0.5){
             float ah = ht*0.22;
             best = min(best, hitBox(ro, rd, vec3(bc.x - 0.08, ht, bc.y - 0.08), vec3(bc.x + 0.08, ht + ah, bc.y + 0.08), tCur, tLim));
+            gPendMat = 3;
             if (h > 0.98) best = min(best, hitBox(ro, rd, vec3(bc.x - 0.10, ht + ah - 0.10, bc.y - 0.10), vec3(bc.x + 0.10, ht + ah + 0.10, bc.y + 0.10), tCur, tLim));
+            gPendMat = 1;
           }
         } else if (arch == 1){                                    // podium + shaft
           float pod = min(ht*0.28, 5.0);
@@ -886,22 +899,28 @@ float traceDDA(vec3 ro, vec3 rd, float tmax){
         } else {                                                  // plain slab
           best = min(best, hitBox(ro, rd, vec3(bc.x - hs.x, 0.0, bc.y - hs.y), vec3(bc.x + hs.x, ht, bc.y + hs.y), tCur, tLim));
         }
+        gPendMat = 8;
         if (yLo < 12.0){                                          // 袖看板 projecting from the facade
           for (int k = 0; k < 3; k++){ vec3 sc, se; float ai;
             if (signOf(cell, k, sc, se, ai)) best = min(best, hitBox(ro, rd, sc - se, sc + se, tCur, tLim)); }
         }
+        gPendMat = 12;
         { vec3 sc, se; float ai;                                  // rooftop board and flush wall panels
           if (yHi > ht - 1.0 && roofSignOf(cell, sc, se, ai)) best = min(best, hitBox(ro, rd, sc - se, sc + se, tCur, tLim));
           if (yLo < 14.0) for (int k = 0; k < 2; k++)
             if (wallSignOf(cell, k, sc, se, ai)) best = min(best, hitBox(ro, rd, sc - se, sc + se, tCur, tLim));
         }
+        gPendMat = 12;
         if (yLo < 3.6){                                           // the shop-front layer: directory, lanterns, pavement board
           vec3 sc, se; float ai;
           if (aboardOf(cell, sc, se, ai)) best = min(best, hitBox(ro, rd, sc - se, sc + se, tCur, tLim));
+          gPendMat = 13;
           for (int k = 0; k < 2; k++) if (tenantOf(cell, k, sc, se)) best = min(best, hitBox(ro, rd, sc - se, sc + se, tCur, tLim));
+          gPendMat = 14;
           float r; for (int k = 0; k < 4; k++)
             if (lanternOf(cell, k, sc, r)) best = min(best, hitCylY(ro, rd, sc.xz, r, sc.y - 0.14, sc.y + 0.14, tCur, tLim));
         }
+        gPendMat = 7;
         if (hash21(cell + 33.1) < 0.45){                          // external pipe bundle up one face
           float side = hash21(cell + 34.7);
           float pt = ht * (0.55 + 0.35*hash21(cell + 35.9));
@@ -911,6 +930,7 @@ float traceDDA(vec3 ro, vec3 rd, float tmax){
             best = min(best, hitCylY(ro, rd, bc + pc, 0.055 + 0.02*float(k), 0.6, pt, tCur, tLim));
           }
         }
+        gPendMat = 7;
         if (arch != 5 && yHi > ht - 0.5){                          // roof clutter
           if (hash21(cell + 9.1) < 0.20){
             for (int k = 0; k < 3; k++){
@@ -925,11 +945,13 @@ float traceDDA(vec3 ro, vec3 rd, float tmax){
             best = min(best, hitCylY(ro, rd, bc + ro2 + vec2(rs.x*0.6, 0.0), 0.09, ht + rh, ht + rh + 1.1, tCur, tLim));
           }
         }
+        gPendMat = 1;
         if (yLo < 1.4 && yHi > 1.2 && hash21(cell + 3.9) < 0.6){   // canopy ring (its hole is the building itself)
           float tr = hitBox(ro, rd, vec3(bc.x - hs.x - 0.45, 1.27, bc.y - hs.y - 0.45), vec3(bc.x + hs.x + 0.45, 1.33, bc.y + hs.y + 0.45), tCur, tLim);
           if (tr < 1e8){ vec3 pr = ro + rd*tr; if (abs(pr.x - bc.x) > hs.x - 0.02 || abs(pr.z - bc.y) > hs.y - 0.02) best = min(best, tr); }
         }
       }
+      gPendMat = 7;
       if (yLo < 42.0 && yHi > 3.0) for (int k = 0; k < 4; k++){     // skybridges reaching into this cell
         int axis = k & 1;
         vec2 src = cell - ((k < 2) ? vec2(0.0) : (axis == 0 ? vec2(1.0, 0.0) : vec2(0.0, 1.0)));
@@ -939,6 +961,7 @@ float traceDDA(vec3 ro, vec3 rd, float tmax){
         vec3 hi = axis == 0 ? vec3(s1, by + hw, perp + hw) : vec3(perp + hw, by + hw, s1);
         best = min(best, hitBox(ro, rd, lo, hi, tCur, tLim));
       }
+      gPendMat = 7;
       if (stationAt(cell) && yHi > 6.0){                          // station: canopy, columns, platforms
         float cxs = (cell.x + 0.5)*CELL, zcs = (cell.y + 0.5)*CELL;
         best = min(best, hitBox(ro, rd, vec3(cxs - CELL*0.5, 9.29, zcs - 3.2), vec3(cxs + CELL*0.5, 9.61, zcs + 3.2), tCur, tLim));
@@ -951,10 +974,12 @@ float traceDDA(vec3 ro, vec3 rd, float tmax){
           best = min(best, hitBox(ro, rd, vec3(cxs - CELL*0.5, 7.52, pz - 0.80), vec3(cxs + CELL*0.5, 7.72, pz + 0.80), tCur, tLim));
         }
       }
+      gPendMat = 7;
       if (plazaAt(cell) && yLo < 3.4){                            // kiosk on the square
         float kx = (cell.x + 0.5)*CELL + 2.1, kz = (cell.y + 0.5)*CELL - 1.8;
         best = min(best, hitBox(ro, rd, vec3(kx - 0.95, 0.0, kz - 0.85), vec3(kx + 0.95, 2.5, kz + 0.85), tCur, tLim));
       }
+      gPendMat = 7;
       if (viaductRow(cell.y) && yHi > 0.0){                       // elevated railway: deck and pier
         float zcv = (cell.y + 0.5)*CELL, cxm = (cell.x + 0.5)*CELL, pxv = cell.x*CELL;
         best = min(best, hitBox(ro, rd, vec3(cxm - CELL*0.5, VIA_Y - VIA_HT, zcv - VIA_HZ), vec3(cxm + CELL*0.5, VIA_Y + VIA_HT, zcv + VIA_HZ), tCur, tLim));
@@ -962,14 +987,17 @@ float traceDDA(vec3 ro, vec3 rd, float tmax){
       }
       }
       if (yLo < 2.7){                                              // street furniture and traffic, all inside the kerb band
+        gPendMat = 9;
         for (int k = 0; k < 2; k++){ vec3 c, e;
           if (vendOf(cell, k, c, e)) best = min(best, hitBox(ro, rd, c - e, c + e, tCur, tLim)); }
+        gPendMat = 11;
         for (int k = 0; k < 2; k++){ vec3 b0; float bob, sc;
           if (pedOf(cell, k, b0, bob, sc)){
             best = min(best, hitCylY(ro, rd, b0.xz, 0.115*sc, b0.y + 0.05, b0.y + (0.78 + bob)*sc, tCur, tLim));
             best = min(best, hitCylY(ro, rd, b0.xz, 0.185*sc, b0.y + (0.70 + bob)*sc, b0.y + (1.32 + bob)*sc, tCur, tLim));
             best = min(best, hitSphere(ro, rd, b0 + vec3(0.0, (1.44 + bob)*sc, 0.0), 0.125*sc, tCur, tLim));
           } }
+        gPendMat = 10;
         for (int k = 0; k < 2; k++){ vec3 c, e; float dr;
           if (carOf(cell, k, c, e, dr)){
             best = min(best, hitBox(ro, rd, c - e, c + e, max(tCur - 4.0, 0.0), tLim + 4.0));
@@ -977,11 +1005,14 @@ float traceDDA(vec3 ro, vec3 rd, float tmax){
             best = min(best, hitBox(ro, rd, cc - ce, cc + ce, max(tCur - 4.0, 0.0), tLim + 4.0));
           } }
       }
+      gPendMat = 1;
       if (yLo < 3.3){                                              // the two street lamps of this cell (post as a thin box, head box)
         for (int k = 0; k < 2; k++){
           float px = k == 0 ? cell.x*CELL + streetHalf(cell.x) - 0.3 : (cell.x + 1.0)*CELL - streetHalf(cell.x + 1.0) + 0.3;
           best = min(best, hitBox(ro, rd, vec3(px - 0.06, 0.0, c.y - 0.06), vec3(px + 0.06, 3.2, c.y + 0.06), tCur, tLim));
+          gPendMat = 6;
           best = min(best, hitBox(ro, rd, vec3(px - 0.13, 3.18, c.y - 0.13), vec3(px + 0.13, 3.26, c.y + 0.13), tCur, tLim));
+          gPendMat = 1;
         }
       }
     }
@@ -993,7 +1024,7 @@ float traceDDA(vec3 ro, vec3 rd, float tmax){
 }
 
 vec2 raymarch(vec3 ro, vec3 rd){
-  if (uPath > 0.5){ float t = traceDDA(ro, rd, MAXD); if (t > 0.0) map(ro + rd*t); return vec2(t, 1.0); }
+  if (uPath > 0.5){ float t = traceDDA(ro, rd, MAXD); gMat = gHitMat; return vec2(t, 1.0); }   // the tracer reports the material; map() is not needed at all on this path
   float t = 0.0;
   for (int i = 0; i < 72; i++){
     vec3 p = ro + rd*t;
@@ -1847,7 +1878,8 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float t, int mat, bool cheap){
     if (!cheap && glassy > 0.5 && t < 45.0 && uPath > 0.5){       // near glass: one real bounce
       float th = traceDDA(p + n*0.03, rr, 55.0);
       vec3 rn = gHitN;                                            // consume it before map() runs
-      if (th > 0.0){ vec3 q = p + n*0.03 + rr*th; map(q); int m2 = gMat; refl = shadeReflected(q, rn, rr, th + t, m2); }
+      int rm2 = gHitMat;
+      if (th > 0.0){ vec3 q = p + n*0.03 + rr*th; refl = shadeReflected(q, rn, rr, th + t, rm2); }
     }
     float cosI = max(dot(-rd, n), 0.0);
     float F0 = mix(0.04, 0.09, glassy);                                    // coated architectural glass is more reflective than plain
@@ -1929,7 +1961,8 @@ vec3 render(vec3 ro, vec3 rd, vec2 uv){
       vec3 rp = p + n*0.02;
       float t2 = 0.0, hit = -1.0;
       vec3 rn2 = vec3(0.0, 1.0, 0.0);
-      if (uPath > 0.5){ hit = traceDDA(rp, rr, 160.0); rn2 = gHitN; if (hit > 0.0) map(rp + rr*hit); }
+      int gm2 = 2;
+      if (uPath > 0.5){ hit = traceDDA(rp, rr, 160.0); rn2 = gHitN; gm2 = gHitMat; }
       else for (int i = 0; i < 10; i++){
         float d = map(rp + rr*t2);
         if (d < 0.002*t2 + 0.001){ hit = t2; break; }
@@ -1938,7 +1971,7 @@ vec3 render(vec3 ro, vec3 rd, vec2 uv){
       }
       vec3 refl = skyColor(rr);
       if (hit > 0.0){
-        int m2 = gMat;
+        int m2 = uPath > 0.5 ? gm2 : gMat;
         vec3 q = rp + rr*hit;
         refl = shade(q, uPath > 0.5 ? rn2 : calcNormal(q), rr, hit + t, m2, true);
       }
