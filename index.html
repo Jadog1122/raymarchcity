@@ -1757,23 +1757,40 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float t, int mat, bool cheap){
     return mix(outc, skyBase(rd) * vec3(0.75, 0.95, 1.2), 1.0 - exp(-fd*t));
   }
   if (mat == 11){ alb = vec3(0.034, 0.032, 0.036); rough = 0.85; glassy = 0.0; }   // a person: almost a silhouette at night
-  if (mat == 10){                                                                 // car: dark glossy shell with its lamps lit
+  if (mat == 10){
+    // A car was one dark glossy box with lamps painted on its front and back faces — and on a street
+    // you almost always see a car from the side, where there was nothing at all: no colour, no glass,
+    // no wheels. Every car now gets a paint job, a glazed cabin and a sill dark enough to sit on.
     alb = vec3(0.048, 0.050, 0.058); rough = 0.22; glassy = 0.55;
-    if (abs(n.z) > 0.5){
-      vec2 bid0 = floor(p.xz / CELL);
-      for (int j = 0; j < 6; j++){
-        vec2 bid = bid0 + vec2(0.0, float(j / 2) - 1.0);
-        int k = j & 1;
-        vec3 cc, ce; float dr;
-        if (!carOf(bid, k, cc, ce, dr)) continue;
-        vec3 q = abs(p - cc) - ce;
-        if (max(q.x, max(q.y, q.z)) > 0.06) continue;
+    vec2 bid0 = floor(p.xz / CELL);
+    for (int j = 0; j < 6; j++){
+      vec2 bid = bid0 + vec2(0.0, float(j / 2) - 1.0);
+      int k = j & 1;
+      vec3 cc, ce; float dr;
+      if (!carOf(bid, k, cc, ce, dr)) continue;
+      vec3 q = abs(p - cc) - ce;
+      vec3 cabC = cc + vec3(0.0, ce.y*0.85, -0.15*dr), cabE = vec3(ce.x*0.78, ce.y*0.55, ce.z*0.48);
+      vec3 cq = abs(p - cabC) - cabE;
+      bool inBody = max(q.x, max(q.y, q.z)) < 0.06;
+      bool inCab  = max(cq.x, max(cq.y, cq.z)) < 0.06;
+      if (!inBody && !inCab) continue;
+      // Most of the traffic is dark, a quarter of it is pale, and one in eight is a taxi.
+      float ch = hash21(vec2(floor(cc.x*4.0), floor(cc.z*2.0)));
+      alb = ch < 0.58 ? vec3(0.026, 0.028, 0.036) * (0.55 + 1.1*hash21(vec2(floor(cc.z*2.0), 7.0)))
+          : (ch < 0.85 ? vec3(0.40, 0.42, 0.45) : vec3(0.46, 0.40, 0.13));
+      if (inCab && !inBody){ alb = vec3(0.016, 0.018, 0.024); rough = 0.05; glassy = 1.0; }   // glazing
+      else if (abs(n.x) > 0.5){
+        float sill = 1.0 - smoothstep(0.06, 0.16, p.y - (cc.y - ce.y));            // shadow under the sill
+        float arch = smoothstep(0.30, 0.17, abs(abs(p.z - cc.z) - ce.z*0.62));     // two wheel arches
+        alb = mix(alb, vec3(0.010, 0.010, 0.012), max(sill, arch * step(p.y, cc.y - ce.y*0.15)));
+      }
+      if (abs(n.z) > 0.5 && inBody){
         float band = step(0.30, p.y - (cc.y - ce.y)) * step(p.y, cc.y + ce.y*0.25);
         float outer = step(0.42, abs(p.x - cc.x) / ce.x);                          // lamps sit at the corners
         float head = step(0.0, n.z * dr), tail = 1.0 - head;
         wEmit += (vec3(1.0, 0.94, 0.84) * 3.4 * head + vec3(1.0, 0.07, 0.03) * 1.1 * tail) * band * outer;
-        break;
       }
+      break;
     }
   }
   if (mat == 12){                                                                 // rooftop board, wall panel or pavement board
