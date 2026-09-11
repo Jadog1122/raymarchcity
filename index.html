@@ -1540,7 +1540,7 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float t, int mat, bool cheap){
     float fd = 0.009 * uParams.y * exp(-0.06*max(p.y, 0.0));
     return mix(outc, skyBase(rd) * vec3(0.75, 0.95, 1.2), 1.0 - exp(-fd*t));
   }
-  if (mat == 11){ alb = vec3(0.028, 0.027, 0.030); rough = 0.85; glassy = 0.0; }   // a person: almost a silhouette at night
+  if (mat == 11){ alb = vec3(0.034, 0.032, 0.036); rough = 0.85; glassy = 0.0; }   // a person: almost a silhouette at night
   if (mat == 10){                                                                 // car: dark glossy shell with its lamps lit
     alb = vec3(0.048, 0.050, 0.058); rough = 0.22; glassy = 0.55;
     if (abs(n.z) > 0.5){
@@ -1672,6 +1672,10 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float t, int mat, bool cheap){
   if (mat == 2) col += carLights(p) * 0.03;
   col += alb * neonLight(p, n) * 1.2;                                          // coloured haze/light from nearby neon on street and walls
   if (mat != 2) col += vec3(1.0, 0.70, 0.42) * 0.015 * ringBoost(p, 0.0);
+  if (mat == 11){                                                              // a figure without an edge is a hole in the picture
+    float rim = pow(1.0 - abs(dot(n, rd)), 3.0);
+    col += rim * (lampLight(p, n) + neonLight(p, n) * 1.2) * 0.10;
+  }
   col += alb * vec3(0.9, 0.72, 0.52) * 0.02 * (0.55 + 0.45*n.y) * smoothstep(80.0, 0.0, p.y);   // city glow: the sky itself is a warm, dim light source
   float bm = beamAt(p);
   if (bm > 0.001){

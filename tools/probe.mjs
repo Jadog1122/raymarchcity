@@ -12,7 +12,7 @@ const page = await ctx.newPage();
 page.on('pageerror', e => console.log('PAGEERROR', e.message));
 await page.goto(pathToFileURL(path.resolve('index.html')).href + '?test=1' + (q || ''));
 await page.waitForTimeout(2600);
-if (js) { await page.evaluate(js); await page.waitForTimeout(900); }
+if (js) { const r = await page.evaluate(js); if (r !== undefined) console.log('eval:', JSON.stringify(r)); await page.waitForTimeout(900); }
 await page.screenshot({ path: out });
 const s = await page.evaluate(() => window.__stats);
 console.log(s.shaderError ? 'SHADER ERROR: ' + s.shaderError.slice(0, 300) : `fps ${s.fps}  scale ${s.renderScale}`);
