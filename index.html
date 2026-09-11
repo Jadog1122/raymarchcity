@@ -150,6 +150,14 @@ float sdCylY(vec3 p, vec2 c, float r, float y0, float y1){
   float dy = abs(p.y - 0.5*(y0 + y1)) - 0.5*(y1 - y0);
   return min(max(d, dy), 0.0) + length(max(vec2(d, dy), 0.0));
 }
+float sdSphere(vec3 p, vec3 c, float r){ return length(p - c) - r; }
+float hitSphere(vec3 ro, vec3 rd, vec3 c, float r, float tCur, float tLim){
+  vec3 o = ro - c; float b = dot(o, rd), cc = dot(o, o) - r*r, disc = b*b - cc;
+  if (disc <= 0.0) return 1e9;
+  float t = -b - sqrt(disc);
+  if (t < tCur) t = -b + sqrt(disc);
+  return (t > tCur && t < tLim) ? t : 1e9;
+}
 float hitCylY(vec3 ro, vec3 rd, vec2 c, float r, float y0, float y1, float tCur, float tLim){
   float best = 1e9;
   vec2 o = ro.xz - c, d = rd.xz;
@@ -244,18 +252,47 @@ bool carOf(vec2 id, int lane, out vec3 c, out vec3 e, out float dir){
   if (id.x == 0.0 && lane != 0) return false;                 // keep the camera's own lane clear, but not the oncoming one
   dir = lane == 0 ? 1.0 : -1.0;
   vec2 seed = vec2(id.x*1.7, float(lane));
-  float P  = 26.0 + 12.0*hash21(seed);
+  float P  = 11.0 + 9.0*hash21(seed);
   float sp = 8.0 + 6.0*hash21(seed + 4.0);
   float c0 = dir*iTime*sp + 100.0*hash21(seed + 8.0);
   float zc = (id.y + 0.5)*CELL;
   float n  = floor((zc - c0) / P + 0.5);
-  if (hash21(seed + n*0.31 + 12.0) > 0.5) return false;
-  c = vec3(id.x*CELL + dir*0.95, 0.12 + e.y, c0 + n*P);
+  float cpos = c0 + n*P;
+  if (abs(cpos - zc) > CELL*0.5) return false;                // that car sits in another block; it is that block's to draw
+  if (id.x == 0.0 && abs(cpos - uCamZ) < 14.0) return false;   // keep the lane beside the lens clear; traffic still runs on down the street
+  if (hash21(seed + n*0.31 + 12.0) > 0.72) return false;
+  c = vec3(id.x*CELL + dir*0.95, 0.12 + e.y, cpos);
+  return true;
+}
+// Someone on the pavement. A figure of known height is the cheapest way to tell the viewer whether
+// the building behind it is thirty storeys or three hundred.
+bool pedOf(vec2 id, int k, out vec3 base, out float bob){
+  base = vec3(0.0); bob = 0.0;
+  if (riverRow(id.y)) return false;
+  vec2 seed = id + 260.0 + float(k)*17.0;
+  if (hash21(seed) >= (mod(floor(id.y / 6.0), 2.0) == 1.0 ? 0.75 : 0.40)) return false;
+  vec2 hs; float ht; cellParams(id, hs, ht);
+  vec2 ctr = (id + 0.5)*CELL + lotOffset(id, hs);
+  float side = hash21(seed + 1.0) < 0.5 ? -1.0 : 1.0;
+  float dir  = hash21(seed + 2.0) < 0.5 ? -1.0 : 1.0;
+  float sp   = 1.0 + 0.7*hash21(seed + 3.0);
+  float lane = 0.55 + 0.55*hash21(seed + 4.0);                    // how far out from the wall they walk
+  float z0   = (id.y + 0.5)*CELL + (hash21(seed + 5.0) - 0.5)*CELL;
+  float z    = z0 + dir*iTime*sp;
+  z = (id.y + 0.5)*CELL + mod(z - (id.y + 0.5)*CELL + CELL*0.5, CELL) - CELL*0.5;   // stays on its own block
+  base = vec3(ctr.x + side*(hs.x + lane), 0.12, z);
+  bob = 0.035 * sin(iTime * sp * 5.2 + hash21(seed + 6.0) * 6.28);
   return true;
 }
 float streetPropsSDF(vec2 id, vec3 p, inout int mat){
   float d = 1e5;
   for (int k = 0; k < 2; k++){ vec3 c, e; if (vendOf(id, k, c, e)){ float v = sdBox(p - c, e); if (v < d){ d = v; mat = 9; } } }
+  for (int k = 0; k < 2; k++){ vec3 b0; float bob;
+    if (pedOf(id, k, b0, bob)){
+      float body = sdCylY(p, b0.xz, 0.145, b0.y + 0.22 + bob, b0.y + 1.26 + bob);
+      body = min(body, sdSphere(p, b0 + vec3(0.0, 1.40 + bob, 0.0), 0.145));
+      if (body < d){ d = body; mat = 11; }
+    } }
   for (int k = 0; k < 2; k++){ vec3 c, e; float dr;
     if (carOf(id, k, c, e, dr)){
       float b = sdBox(p - c, e);
@@ -579,11 +616,16 @@ float traceDDA(vec3 ro, vec3 rd, float tmax){
       if (yLo < 2.7){                                              // street furniture and traffic, all inside the kerb band
         for (int k = 0; k < 2; k++){ vec3 c, e;
           if (vendOf(cell, k, c, e)) best = min(best, hitBox(ro, rd, c - e, c + e, tCur, tLim)); }
+        for (int k = 0; k < 2; k++){ vec3 b0; float bob;
+          if (pedOf(cell, k, b0, bob)){
+            best = min(best, hitCylY(ro, rd, b0.xz, 0.145, b0.y + 0.22 + bob, b0.y + 1.26 + bob, tCur, tLim));
+            best = min(best, hitSphere(ro, rd, b0 + vec3(0.0, 1.40 + bob, 0.0), 0.145, tCur, tLim));
+          } }
         for (int k = 0; k < 2; k++){ vec3 c, e; float dr;
           if (carOf(cell, k, c, e, dr)){
-            best = min(best, hitBox(ro, rd, c - e, c + e, tCur, tLim));
+            best = min(best, hitBox(ro, rd, c - e, c + e, max(tCur - 4.0, 0.0), tLim + 4.0));
             vec3 cc = c + vec3(0.0, e.y*0.85, -0.15*dr), ce = vec3(e.x*0.78, e.y*0.55, e.z*0.48);
-            best = min(best, hitBox(ro, rd, cc - ce, cc + ce, tCur, tLim));
+            best = min(best, hitBox(ro, rd, cc - ce, cc + ce, max(tCur - 4.0, 0.0), tLim + 4.0));
           } }
       }
       if (yLo < 3.3){                                              // the two street lamps of this cell (post as a thin box, head box)
@@ -717,11 +759,11 @@ vec3 carLights(vec3 p){
     for (int lane = 0; lane < 2; lane++){
       float dir = lane == 0 ? 1.0 : -1.0;
       vec2 seed = vec2(k*1.7 + float(axis)*31.0, float(lane));
-      float P  = 26.0 + 12.0*hash21(seed);
+      float P  = 11.0 + 9.0*hash21(seed);
       float sp = 8.0 + 6.0*hash21(seed + 4.0);
       float c0 = dir*iTime*sp + 100.0*hash21(seed + 8.0);
       float n  = floor((along - c0) / P + 0.5);
-      if (hash21(seed + n*0.31 + 12.0) > 0.5) continue;          // empty slot
+      if (hash21(seed + n*0.31 + 12.0) > 0.72) continue;          // empty slot
       float cpos = c0 + n*P;
       vec2 hl2 = axis == 0 ? vec2(k*CELL + dir*0.7, cpos) : vec2(cpos, k*CELL + dir*0.7);
       vec3 v = p - vec3(hl2.x, 0.45, hl2.y);
@@ -1066,11 +1108,14 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float t, int mat, bool cheap){
     float fd = 0.009 * uParams.y * exp(-0.06*max(p.y, 0.0));
     return mix(outc, skyBase(rd) * vec3(0.75, 0.95, 1.2), 1.0 - exp(-fd*t));
   }
+  if (mat == 11){ alb = vec3(0.028, 0.027, 0.030); rough = 0.85; glassy = 0.0; }   // a person: almost a silhouette at night
   if (mat == 10){                                                                 // car: dark glossy shell with its lamps lit
-    alb = vec3(0.030, 0.032, 0.038); rough = 0.22; glassy = 0.55;
+    alb = vec3(0.048, 0.050, 0.058); rough = 0.22; glassy = 0.55;
     if (abs(n.z) > 0.5){
-      vec2 bid = floor(p.xz / CELL);
-      for (int k = 0; k < 2; k++){
+      vec2 bid0 = floor(p.xz / CELL);
+      for (int j = 0; j < 6; j++){
+        vec2 bid = bid0 + vec2(0.0, float(j / 2) - 1.0);
+        int k = j & 1;
         vec3 cc, ce; float dr;
         if (!carOf(bid, k, cc, ce, dr)) continue;
         vec3 q = abs(p - cc) - ce;
@@ -1483,7 +1528,7 @@ void main(){
     col = mix(perChannel, clamp(hueKeep, 0.0, 1.0), keep);
   }
   col = pow(col, vec3(1.0/2.2));
-  col = max(col - 0.028, 0.0) / (1.0 - 0.028);                 // crush the blacks (film toe)
+  col = max(col - 0.033, 0.0) / (1.0 - 0.033);                 // crush the blacks (film toe)
   col = pow(col * vec3(1.0, 0.99, 0.97) + vec3(0.0, 0.006, 0.009), vec3(1.0, 0.98, 0.96));   // print-style grade: cyan-green toe, warm highs
   { float l2 = dot(col, vec3(0.2126, 0.7152, 0.0722)); col = mix(vec3(l2), col, 1.0 + 0.3*smoothstep(0.25, 0.8, l2)); }   // lights a little more vivid
   { // split toning per rig: teal shadows, amber highlights; the aerial and river shots lean colder, the tower push warmer
