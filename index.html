@@ -130,12 +130,42 @@ vec3  gRo = vec3(0.0);  // camera position (for cloud projection)
 float sdBox(vec3 p, vec3 b){ vec3 d = abs(p) - b; return length(max(d, 0.0)) + min(max(d.x, max(d.y, d.z)), 0.0); }
 
 // per-block parameters from the integer cell id
+// Zoning. A low-frequency field over the block grid, so districts come out as contiguous
+// neighbourhoods rather than per-block noise: 0 downtown towers, 1 entertainment, 2 low-rise old
+// town, 3 offices, 4 industrial.
+int districtOf(vec2 id){
+  float a = vnoise(id * 0.075 + 3.1);
+  float b = vnoise(id * 0.115 + 17.7);
+  if (a > 0.63) return 0;
+  if (b > 0.62) return 1;
+  if (a < 0.33) return 2;
+  if (b < 0.34) return 4;
+  return 3;
+}
+// Street hierarchy along x: one avenue and one back alley in every five, the rest ordinary.
+float streetHalf(float kx){
+  float m = mod(kx, 5.0);
+  return m == 0.0 ? 3.10 : (m == 3.0 ? 1.15 : 2.0);
+}
+// The buildable span of a block, once its two streets have taken their width.
+void lotSpanX(vec2 id, out float cx, out float halfx){
+  float lo = id.x*CELL + streetHalf(id.x), hi = (id.x + 1.0)*CELL - streetHalf(id.x + 1.0);
+  cx = 0.5*(lo + hi); halfx = max(0.5*(hi - lo), 0.5);
+}
 void cellParams(vec2 id, out vec2 hs, out float ht){
   vec2 r = hash22(id + 5.3);
-  hs = vec2(1.0) + 1.0*r;                       // half size 1.0..2.0  (cell half 4.0 - street 2.0 = 2.0 max)
   float h = hash21(id);
-  ht = 2.0 + 28.0*pow(h, 4.0);                  // power law: many low, few tall
-  if (hash21(id + 17.3) < 0.10) ht = 0.35;      // a few empty lots
+  int dz = districtOf(id);
+  // Each district has its own skyline statistics; that is what makes a neighbourhood read as one.
+  if (dz == 0){ hs = vec2(1.35) + 0.75*r; ht = 12.0 + 26.0*pow(h, 2.0); }            // downtown: tall, broad
+  else if (dz == 1){ hs = vec2(0.95) + 0.75*r; ht = 5.0 + 13.0*pow(h, 2.6); }        // entertainment: mid-rise, packed
+  else if (dz == 2){ hs = vec2(0.85) + 0.55*r; ht = 2.6 + 6.0*pow(h, 1.6); }         // old town: low and small-grained
+  else if (dz == 4){ hs = vec2(1.5) + 0.7*r;  ht = 3.0 + 5.0*h; }                     // industrial: wide low sheds
+  else { hs = vec2(1.2) + 0.7*r; ht = 8.0 + 15.0*pow(h, 1.5); }                        // offices: even mid-rise
+  float cx, halfx; lotSpanX(id, cx, halfx);
+  hs.x = min(hs.x, max(halfx - 0.2, 0.45));                                            // an alley block is a narrow lot
+  hs.y = min(hs.y, CELL*0.5 - 1.55);
+  if (hash21(id + 17.3) < (dz == 2 ? 0.05 : 0.10)) ht = 0.35;                          // a few empty lots
 }
 
 #define TOWER_H 90.0
@@ -143,8 +173,19 @@ vec3 towerPos(){ return vec3(14.0, 0.0, uCamZ + 200.0); }   // landmark: always 
 float blink(){ return 1.0 - step(0.5, fract(iTime)); }        // 1 Hz aviation light
 
 // ---- exact SDF components (one cell at a time) ----
-vec2 lotOffset(vec2 id, vec2 hs){ return (hash22(id + 11.9) - 0.5) * 2.0 * (CELL*0.5 - STREET - hs); }   // slide inside the lot, never into the street
+vec2 lotOffset(vec2 id, vec2 hs){                       // slide inside the lot, never into either street
+  float cx, halfx; lotSpanX(id, cx, halfx);
+  float ox = cx - (id.x + 0.5)*CELL + (hash21(id + 11.9) - 0.5) * 2.0 * max(halfx - hs.x, 0.0);
+  float oz = (hash21(id + 12.7) - 0.5) * 2.0 * max(CELL*0.5 - 1.55 - hs.y, 0.0);
+  return vec2(ox, oz);
+}
 bool riverRow(float idy){ float r = mod(idy, 7.0); return r == 3.0 || r == 4.0; }
+// An elevated railway crossing the grid every thirteenth row. Civic infrastructure is what makes a
+// grid read as a plan rather than a field of blocks.
+bool viaductRow(float idz){ return mod(idz, 13.0) == 6.0; }
+#define VIA_Y   7.0
+#define VIA_HZ  1.55
+#define VIA_HT  0.55
 
 // vertical capped cylinder: SDF and analytic intersection, so curved towers and pipes agree between the two paths
 float sdCylY(vec3 p, vec2 c, float r, float y0, float y1){
@@ -185,7 +226,11 @@ float hitCylY(vec3 ro, vec3 rd, vec2 c, float r, float y0, float y1, float tCur,
 // Cladding of one block: 0 concrete, 1 glass curtain wall, 2 brick / stone.
 int matClassOf(vec2 id){
   float m = hash21(id + 101.3);
-  return m < 0.36 ? 1 : (m < 0.60 ? 2 : 0);
+  int dz = districtOf(id);
+  if (dz == 0 || dz == 3) return m < 0.68 ? 1 : 0;      // downtown and offices: curtain wall
+  if (dz == 2) return m < 0.62 ? 2 : 0;                 // old town: masonry
+  if (dz == 4) return 0;                                 // industrial: concrete
+  return m < 0.30 ? 1 : (m < 0.70 ? 2 : 0);              // entertainment: a mixture
 }
 int archOf(vec2 id){
   float h = hash21(id);
@@ -201,7 +246,7 @@ bool signOf(vec2 id, int k, out vec3 c, out vec3 e, out float atlasIdx){
   if (riverRow(id.y)) return false;
   vec2 hs; float ht; cellParams(id, hs, ht);
   if (ht < 6.0) return false;
-  float dens = (mod(floor(id.y / 6.0), 2.0) == 1.0) ? 0.85 : 0.18;   // the neon bands are papered with them; ordinary streets stay sparse
+  float dens = (districtOf(id) == 1) ? 0.85 : 0.18;   // the neon bands are papered with them; ordinary streets stay sparse
   if (hash21(id + 140.0 + float(k)*11.0) >= dens) return false;
   float y = 2.9 + 2.5*float(k);
   if (y + 1.2 > ht) return false;
@@ -218,7 +263,7 @@ bool roofSignOf(vec2 id, out vec3 c, out vec3 e, out float ai){
   if (riverRow(id.y)) return false;
   vec2 hs; float ht; cellParams(id, hs, ht);
   if (ht < 9.0 || ht > 30.0) return false;
-  float dens = (mod(floor(id.y / 6.0), 2.0) == 1.0) ? 0.55 : 0.22;
+  float dens = (districtOf(id) == 1) ? 0.55 : 0.22;
   if (hash21(id + 301.0) >= dens) return false;
   vec2 ctr = (id + 0.5)*CELL + lotOffset(id, hs);
   float w = min(hs.x * 0.85, 2.6), h = 0.75 + 0.35*hash21(id + 303.0);
@@ -231,7 +276,7 @@ bool roofSignOf(vec2 id, out vec3 c, out vec3 e, out float ai){
 bool wallSignOf(vec2 id, int k, out vec3 c, out vec3 e, out float ai){
   c = vec3(0.0); e = vec3(0.08, 0.42, 1.5); ai = 0.0;
   if (riverRow(id.y)) return false;
-  float dens = (mod(floor(id.y / 6.0), 2.0) == 1.0) ? 0.6 : 0.3;
+  float dens = (districtOf(id) == 1) ? 0.6 : 0.3;
   if (hash21(id + 321.0 + float(k)*9.0) >= dens) return false;
   vec2 hs; float ht; cellParams(id, hs, ht);
   if (ht < 5.0) return false;
@@ -249,7 +294,7 @@ bool wallSignOf(vec2 id, int k, out vec3 c, out vec3 e, out float ai){
 bool tenantOf(vec2 id, int k, out vec3 c, out vec3 e){
   c = vec3(0.0); e = vec3(0.07, 1.10, 0.52);
   if (riverRow(id.y)) return false;
-  float dens = (mod(floor(id.y / 6.0), 2.0) == 1.0) ? 0.9 : 0.6;
+  float dens = (districtOf(id) == 1) ? 0.9 : 0.6;
   if (hash21(id + 341.0 + float(k)*13.0) >= dens) return false;
   vec2 hs; float ht; cellParams(id, hs, ht);
   if (ht < 4.0) return false;
@@ -262,7 +307,7 @@ bool tenantOf(vec2 id, int k, out vec3 c, out vec3 e){
 bool lanternOf(vec2 id, int k, out vec3 c, out float r){
   c = vec3(0.0); r = 0.145;
   if (riverRow(id.y)) return false;
-  if (hash21(id + 361.0) >= ((mod(floor(id.y / 6.0), 2.0) == 1.0) ? 0.8 : 0.45)) return false;
+  if (hash21(id + 361.0) >= ((districtOf(id) == 1) ? 0.8 : 0.45)) return false;
   vec2 hs; float ht; cellParams(id, hs, ht);
   vec2 ctr = (id + 0.5)*CELL + lotOffset(id, hs);
   float side = hash21(id + 363.0) < 0.5 ? -1.0 : 1.0;
@@ -274,7 +319,7 @@ bool lanternOf(vec2 id, int k, out vec3 c, out float r){
 bool aboardOf(vec2 id, out vec3 c, out vec3 e, out float ai){
   c = vec3(0.0); e = vec3(0.05, 0.34, 0.46); ai = 0.0;
   if (riverRow(id.y)) return false;
-  if (hash21(id + 381.0) >= ((mod(floor(id.y / 6.0), 2.0) == 1.0) ? 0.7 : 0.4)) return false;
+  if (hash21(id + 381.0) >= ((districtOf(id) == 1) ? 0.7 : 0.4)) return false;
   vec2 hs; float ht; cellParams(id, hs, ht);
   vec2 ctr = (id + 0.5)*CELL + lotOffset(id, hs);
   float side = hash21(id + 383.0) < 0.5 ? -1.0 : 1.0;
@@ -350,7 +395,7 @@ bool carOf(vec2 id, int lane, out vec3 c, out vec3 e, out float dir){
   if (abs(cpos - zc) > CELL*0.5) return false;                // that car sits in another block; it is that block's to draw
   if (id.x == 0.0 && abs(cpos - uCamZ) < 14.0) return false;   // keep the lane beside the lens clear; traffic still runs on down the street
   if (hash21(seed + n*0.31 + 12.0) > 0.72) return false;
-  c = vec3(id.x*CELL + dir*0.95, 0.12 + e.y, cpos);
+  c = vec3(id.x*CELL + dir*streetHalf(id.x)*0.45, 0.12 + e.y, cpos);
   return true;
 }
 // Someone on the pavement. A figure of known height is the cheapest way to tell the viewer whether
@@ -397,7 +442,7 @@ bool bridgeOf(vec2 id, int axis, out float by, out float hw, out float span0, ou
   by = 0.0; hw = 0.6; span0 = 0.0; span1 = 0.0; perp = 0.0;
   vec2 idB = id + (axis == 0 ? vec2(1.0, 0.0) : vec2(0.0, 1.0));
   if (riverRow(id.y) || riverRow(idB.y)) return false;
-  float dens = (mod(floor(id.y / 6.0), 2.0) == 1.0) ? 0.30 : 0.14;   // denser over the neon bands
+  float dens = (districtOf(id) == 1) ? 0.30 : 0.14;   // denser over the neon bands
   if (hash21(id + 61.3 + float(axis)*7.0) >= dens) return false;
   vec2 hsA; float htA; cellParams(id, hsA, htA);
   vec2 hsB; float htB; cellParams(idB, hsB, htB);
@@ -426,10 +471,37 @@ float bridgesSDF(vec2 id, vec3 p){
   return d;
 }
 
+// Viaduct deck and its piers, for the cell the point is in.
+float viaductSDF(vec2 id, vec3 p){
+  if (!viaductRow(id.y)) return 1e5;
+  float zc = (id.y + 0.5)*CELL;
+  float d = sdBox(vec3(p.x - (id.x + 0.5)*CELL, p.y - VIA_Y, p.z - zc), vec3(CELL*0.5, VIA_HT, VIA_HZ));
+  float px = id.x*CELL;                                                    // one pier per block, on the street line
+  d = min(d, sdBox(vec3(p.x - px, p.y - (VIA_Y - VIA_HT)*0.5, p.z - zc), vec3(0.55, (VIA_Y - VIA_HT)*0.5, 0.55)));
+  return d;
+}
+// Where a street crosses the water it crosses on a bridge; elsewhere the bank has a parapet.
+float riverEdgeSDF(vec2 id, vec3 p, inout int mat){
+  if (!riverRow(id.y)) return 1e5;
+  float d = 1e5;
+  for (int k = 0; k < 2; k++){
+    float kx = id.x + float(k), hw = streetHalf(kx);
+    float b = sdBox(vec3(p.x - kx*CELL, p.y - 0.30, p.z - (id.y + 0.5)*CELL), vec3(hw, 0.30, CELL*0.5));
+    if (b < d){ d = b; mat = 2; }
+    float rail = sdBox(vec3(abs(p.x - kx*CELL) - hw + 0.10, p.y - 0.85, p.z - (id.y + 0.5)*CELL), vec3(0.10, 0.28, CELL*0.5));
+    if (rail < d){ d = rail; mat = 7; }
+  }
+  float rowm = mod(id.y, 7.0);                                             // parapet along the bank
+  float zEdge = (rowm == 3.0 ? id.y*CELL : (id.y + 1.0)*CELL);
+  float w = sdBox(vec3(p.x - (id.x + 0.5)*CELL, p.y - 0.42, p.z - zEdge), vec3(CELL*0.5, 0.42, 0.22));
+  if (w < d){ d = w; mat = 2; }
+  return d;
+}
 float lotSDF(vec2 id, vec3 p, out int mat){                    // the building(s) of one cell, exact
   mat = 1;
   float br = bridgesSDF(id, p);
-  if (riverRow(id.y)) return br;
+  { float v = viaductSDF(id, p); if (v < br){ br = v; mat = 7; } }
+  if (riverRow(id.y)){ int rm = mat; float re = riverEdgeSDF(id, p, rm); if (re < br){ br = re; mat = rm; } return br; }
   vec2 hs; float ht; cellParams(id, hs, ht);
   float h = hash21(id);
   int arch = archOf(id);
@@ -527,12 +599,13 @@ float lotSDF(vec2 id, vec3 p, out int mat){                    // the building(s
 float slabSDF(vec2 id, vec3 p){                                 // sidewalk slab, kerb 0.12 high
   if (riverRow(id.y)) return 1e5;
   vec2 q = p.xz - (id + 0.5)*CELL;
-  return sdBox(vec3(q.x, p.y - 0.06, q.y), vec3(CELL*0.5 - 1.55, 0.06, CELL*0.5 - 1.55));
+  float cx, halfx; lotSpanX(id, cx, halfx);
+  return sdBox(vec3(p.x - cx, p.y - 0.06, q.y), vec3(halfx, 0.06, CELL*0.5 - 1.55));
 }
 float lampSDF(vec2 id, vec3 p, out int mat){                    // the two street lamps of one cell (one per N-S street side)
   mat = 1;
   if (riverRow(id.y)) return 1e5;
-  float px0 = id.x*CELL + 1.75, px1 = (id.x + 1.0)*CELL - 1.75;
+  float px0 = id.x*CELL + streetHalf(id.x) - 0.3, px1 = (id.x + 1.0)*CELL - streetHalf(id.x + 1.0) + 0.3;
   float lx = min(abs(p.x - px0), abs(p.x - px1));
   float lz = p.z - (id.y + 0.5)*CELL;
   float post = max(length(vec2(lx, lz)) - 0.06, abs(p.y - 1.6) - 1.6);
@@ -622,12 +695,35 @@ float traceDDA(vec3 ro, vec3 rd, float tmax){
   for (int i = 0; i < 96; i++){
     float tExit = min(tMax.x, tMax.y);
     float tLim = min(tExit, best);
+    if (tCur < tLim && riverRow(cell.y)){
+      float yIn2 = ro.y + rd.y*tCur, yOut2 = ro.y + rd.y*tLim;
+      float yLo2 = min(yIn2, yOut2), yHi2 = max(yIn2, yOut2);
+      float zcr = (cell.y + 0.5)*CELL;
+      if (yLo2 < 1.6){                                             // bridges carrying the streets, and the bank parapet
+        for (int k = 0; k < 2; k++){
+          float kx = cell.x + float(k), hw = streetHalf(kx);
+          best = min(best, hitBox(ro, rd, vec3(kx*CELL - hw, 0.0, zcr - CELL*0.5), vec3(kx*CELL + hw, 0.60, zcr + CELL*0.5), tCur, tLim));
+          for (int sg = 0; sg < 2; sg++){
+            float xr = kx*CELL + (sg == 0 ? -1.0 : 1.0)*(hw - 0.10);
+            best = min(best, hitBox(ro, rd, vec3(xr - 0.10, 0.57, zcr - CELL*0.5), vec3(xr + 0.10, 1.13, zcr + CELL*0.5), tCur, tLim));
+          }
+        }
+        float rowm = mod(cell.y, 7.0);
+        float zEdge = (rowm == 3.0 ? cell.y*CELL : (cell.y + 1.0)*CELL);
+        best = min(best, hitBox(ro, rd, vec3(cell.x*CELL, 0.0, zEdge - 0.22), vec3((cell.x + 1.0)*CELL, 0.84, zEdge + 0.22), tCur, tLim));
+      }
+      if (viaductRow(cell.y) && yHi2 > 0.0){
+        float cxm = (cell.x + 0.5)*CELL, pxv = cell.x*CELL;
+        best = min(best, hitBox(ro, rd, vec3(cxm - CELL*0.5, VIA_Y - VIA_HT, zcr - VIA_HZ), vec3(cxm + CELL*0.5, VIA_Y + VIA_HT, zcr + VIA_HZ), tCur, tLim));
+        best = min(best, hitBox(ro, rd, vec3(pxv - 0.55, 0.0, zcr - 0.55), vec3(pxv + 0.55, VIA_Y - VIA_HT, zcr + 0.55), tCur, tLim));
+      }
+    }
     if (tCur < tLim && !riverRow(cell.y)){
       vec2 c = (cell + 0.5)*CELL;
       float yIn = ro.y + rd.y*tCur, yOut = ro.y + rd.y*tLim;
       float yLo = min(yIn, yOut), yHi = max(yIn, yOut);
-      float sh = CELL*0.5 - 1.55;
-      if (yLo < 0.13) best = min(best, hitBox(ro, rd, vec3(c.x - sh, -0.01, c.y - sh), vec3(c.x + sh, 0.12, c.y + sh), tCur, tLim));   // sidewalk slab
+      float sh = CELL*0.5 - 1.55, scx, shx; lotSpanX(cell, scx, shx);
+      if (yLo < 0.13) best = min(best, hitBox(ro, rd, vec3(scx - shx, -0.01, c.y - sh), vec3(scx + shx, 0.12, c.y + sh), tCur, tLim));   // sidewalk slab
       vec2 hs; float ht; cellParams(cell, hs, ht); vec2 off = lotOffset(cell, hs);
       vec2 bc = c + off;
       float h = hash21(cell);
@@ -725,6 +821,11 @@ float traceDDA(vec3 ro, vec3 rd, float tmax){
         vec3 hi = axis == 0 ? vec3(s1, by + hw, perp + hw) : vec3(perp + hw, by + hw, s1);
         best = min(best, hitBox(ro, rd, lo, hi, tCur, tLim));
       }
+      if (viaductRow(cell.y) && yHi > 0.0){                       // elevated railway: deck and pier
+        float zcv = (cell.y + 0.5)*CELL, cxm = (cell.x + 0.5)*CELL, pxv = cell.x*CELL;
+        best = min(best, hitBox(ro, rd, vec3(cxm - CELL*0.5, VIA_Y - VIA_HT, zcv - VIA_HZ), vec3(cxm + CELL*0.5, VIA_Y + VIA_HT, zcv + VIA_HZ), tCur, tLim));
+        best = min(best, hitBox(ro, rd, vec3(pxv - 0.55, 0.0, zcv - 0.55), vec3(pxv + 0.55, VIA_Y - VIA_HT, zcv + 0.55), tCur, tLim));
+      }
       if (yLo < 2.7){                                              // street furniture and traffic, all inside the kerb band
         for (int k = 0; k < 2; k++){ vec3 c, e;
           if (vendOf(cell, k, c, e)) best = min(best, hitBox(ro, rd, c - e, c + e, tCur, tLim)); }
@@ -743,7 +844,7 @@ float traceDDA(vec3 ro, vec3 rd, float tmax){
       }
       if (yLo < 3.3){                                              // the two street lamps of this cell (post as a thin box, head box)
         for (int k = 0; k < 2; k++){
-          float px = k == 0 ? cell.x*CELL + 1.75 : (cell.x + 1.0)*CELL - 1.75;
+          float px = k == 0 ? cell.x*CELL + streetHalf(cell.x) - 0.3 : (cell.x + 1.0)*CELL - streetHalf(cell.x + 1.0) + 0.3;
           best = min(best, hitBox(ro, rd, vec3(px - 0.06, 0.0, c.y - 0.06), vec3(px + 0.06, 3.2, c.y + 0.06), tCur, tLim));
           best = min(best, hitBox(ro, rd, vec3(px - 0.13, 3.18, c.y - 0.13), vec3(px + 0.13, 3.26, c.y + 0.13), tCur, tLim));
         }
@@ -818,7 +919,8 @@ vec3 lampLight(vec3 p, vec3 n){
   float zn = p.z > zc ? zc + CELL : zc - CELL;
   vec3 acc = vec3(0.0);
   for (int i = 0; i < 4; i++){
-    vec3 lp = vec3(kx + ((i & 1) == 0 ? -1.75 : 1.75), 3.1, (i < 2) ? zc : zn);
+    float lh = streetHalf(kx / CELL) - 0.3;
+    vec3 lp = vec3(kx + ((i & 1) == 0 ? -lh : lh), 3.1, (i < 2) ? zc : zn);
     vec3 v = lp - p; float d2 = dot(v, v); vec3 l = v * inversesqrt(d2 + 1e-4);
     float spot = smoothstep(0.10, 0.55, l.y);                      // shines downward
     float nl = n.y > 1.5 ? 1.0 : max(dot(n, l), 0.0);
@@ -834,7 +936,8 @@ vec3 lampGlow(vec3 ro, vec3 rd, float tmax){
     float z = z0 + float(i >> 1) * CELL;
     float rmz = mod(floor(z / CELL), 7.0);
     if (rmz == 3.0 || rmz == 4.0) continue;
-    vec3 lp = vec3(((i & 1) == 0 ? -1.75 : 1.75), 3.1, z);
+    float lh0 = streetHalf(0.0) - 0.3;
+    vec3 lp = vec3(((i & 1) == 0 ? -lh0 : lh0), 3.1, z);
     vec3 a = ro - lp; float b = dot(rd, a); float c = dot(a, a);
     float h = sqrt(max(c - b*b, 0.04));
     acc += vec3(1.0, 0.72, 0.45) * (atan((tmax + b) / h) - atan(b / h)) / h;
@@ -880,7 +983,8 @@ vec3 carLights(vec3 p){
       float n  = floor((along - c0) / P + 0.5);
       if (hash21(seed + n*0.31 + 12.0) > 0.72) continue;          // empty slot
       float cpos = c0 + n*P;
-      vec2 hl2 = axis == 0 ? vec2(k*CELL + dir*0.7, cpos) : vec2(cpos, k*CELL + dir*0.7);
+      float lw = axis == 0 ? streetHalf(k)*0.45 : 0.9;
+      vec2 hl2 = axis == 0 ? vec2(k*CELL + dir*lw, cpos) : vec2(cpos, k*CELL + dir*lw);
       vec3 v = p - vec3(hl2.x, 0.45, hl2.y);
       float d2 = dot(v, v);
       float ahead = axis == 0 ? v.z : v.x;
@@ -891,7 +995,7 @@ vec3 carLights(vec3 p){
   return acc;
 }
 
-bool neonDistrict(vec2 id){ return mod(floor(id.y / 6.0), 2.0) == 1.0; }              // every other 48-unit band is a neon district
+bool neonDistrict(vec2 id){ return districtOf(id) == 1; }                              // the entertainment quarter
 vec3 neonPalette(vec2 id){
   float c = hash21(id + 71.0);
   return c < 0.35 ? vec3(1.0, 0.15, 0.55) : (c < 0.65 ? vec3(0.15, 0.85, 1.0) : (c < 0.85 ? vec3(1.0, 0.58, 0.12) : vec3(0.55, 0.25, 1.0)));   // magenta / cyan / amber / violet
