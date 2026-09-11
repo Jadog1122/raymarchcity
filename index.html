@@ -242,7 +242,7 @@ bool vendOf(vec2 id, int k, out vec3 c, out vec3 e){
   float side = hash21(id + 221.0 + float(k)) < 0.5 ? -1.0 : 1.0;
   float zoff = (hash21(id + 233.0 + float(k)*3.0) - 0.5) * max(hs.y - 0.6, 0.0) * 1.6 + float(k)*0.95;
   c = vec3(ctr.x + side*(hs.x + 0.34), 0.12 + e.y, ctr.y + zoff);
-  return true;
+  return distance(c.xz, uCamRo.xz) > 7.0;                      // never right against the lens
 }
 // A car in one of the two lanes of the street on this cell's -x edge. Same timing as carLights(),
 // so the body and the pool of light it throws on the road belong to each other.
@@ -282,15 +282,16 @@ bool pedOf(vec2 id, int k, out vec3 base, out float bob){
   z = (id.y + 0.5)*CELL + mod(z - (id.y + 0.5)*CELL + CELL*0.5, CELL) - CELL*0.5;   // stays on its own block
   base = vec3(ctr.x + side*(hs.x + lane), 0.12, z);
   bob = 0.035 * sin(iTime * sp * 5.2 + hash21(seed + 6.0) * 6.28);
-  return true;
+  return distance(base.xz, uCamRo.xz) > 6.0;                   // same: a figure reads as scale at a distance, not in your face
 }
 float streetPropsSDF(vec2 id, vec3 p, inout int mat){
   float d = 1e5;
   for (int k = 0; k < 2; k++){ vec3 c, e; if (vendOf(id, k, c, e)){ float v = sdBox(p - c, e); if (v < d){ d = v; mat = 9; } } }
   for (int k = 0; k < 2; k++){ vec3 b0; float bob;
     if (pedOf(id, k, b0, bob)){
-      float body = sdCylY(p, b0.xz, 0.145, b0.y + 0.22 + bob, b0.y + 1.26 + bob);
-      body = min(body, sdSphere(p, b0 + vec3(0.0, 1.40 + bob, 0.0), 0.145));
+      float body = sdCylY(p, b0.xz, 0.115, b0.y + 0.05, b0.y + 0.78 + bob);                    // legs
+      body = min(body, sdCylY(p, b0.xz, 0.185, b0.y + 0.70 + bob, b0.y + 1.32 + bob));        // torso
+      body = min(body, sdSphere(p, b0 + vec3(0.0, 1.44 + bob, 0.0), 0.125));                  // head
       if (body < d){ d = body; mat = 11; }
     } }
   for (int k = 0; k < 2; k++){ vec3 c, e; float dr;
@@ -618,8 +619,9 @@ float traceDDA(vec3 ro, vec3 rd, float tmax){
           if (vendOf(cell, k, c, e)) best = min(best, hitBox(ro, rd, c - e, c + e, tCur, tLim)); }
         for (int k = 0; k < 2; k++){ vec3 b0; float bob;
           if (pedOf(cell, k, b0, bob)){
-            best = min(best, hitCylY(ro, rd, b0.xz, 0.145, b0.y + 0.22 + bob, b0.y + 1.26 + bob, tCur, tLim));
-            best = min(best, hitSphere(ro, rd, b0 + vec3(0.0, 1.40 + bob, 0.0), 0.145, tCur, tLim));
+            best = min(best, hitCylY(ro, rd, b0.xz, 0.115, b0.y + 0.05, b0.y + 0.78 + bob, tCur, tLim));
+            best = min(best, hitCylY(ro, rd, b0.xz, 0.185, b0.y + 0.70 + bob, b0.y + 1.32 + bob, tCur, tLim));
+            best = min(best, hitSphere(ro, rd, b0 + vec3(0.0, 1.44 + bob, 0.0), 0.125, tCur, tLim));
           } }
         for (int k = 0; k < 2; k++){ vec3 c, e; float dr;
           if (carOf(cell, k, c, e, dr)){
@@ -682,7 +684,9 @@ vec3 skyBase(vec3 rd){
 }
 
 // Searchlight on the landmark tower: slow sweep, tilted down so the beam falls between the buildings.
-vec3 searchOrigin(){ return towerPos() + vec3(0.0, TOWER_H + 2.0, 0.0); }
+// Mounted on the roof beside the mast, not on it: sitting inside the spire made the occlusion test
+// treat the lamp itself as blocked, so the one direction the lamp is in had no haze at all.
+vec3 searchOrigin(){ return towerPos() + vec3(1.45, TOWER_H + 1.2, 1.45); }
 vec3 searchDir(){ float a = uSearch; float ct = cos(0.44), st = sin(0.44); return normalize(vec3(cos(a)*ct, -st, sin(a)*ct)); }   // 25 deg down: lands near the camera
 // beam intensity at a point (cone, soft edge, distance falloff)
 float beamAt(vec3 p){
@@ -1059,7 +1063,8 @@ vec3 windowLight(vec3 p, vec3 n, vec3 rd, float t, out float leak, out float fac
   facade = mix(mix(0.5, 1.0, slab*mull) * parapet, 0.9, lod);
   float ring = 1.0 + 1.5*gRing;
   leak = mix(leak * 0.22, 0.04 * prof * occ * ring, lod);
-  return mix(emit, vec3(1.0, 0.76, 0.52) * 0.10 * prof * occ * ring, lod) * 2.2;
+  float far = 0.45 + 2.2*pow(hash21(id + 88.3), 2.0);            // some towers read bright from a distance, most do not
+  return mix(emit, vec3(1.0, 0.76, 0.52) * 0.10 * prof * occ * ring * far, lod) * 2.2;
 }
 
 // What a vertical window sees when it is not worth tracing: sky above the horizon, and below it the
@@ -1226,28 +1231,31 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float t, int mat, bool cheap){
 
 // single scattering of the searchlight along the view ray, sampled where the ray passes the beam
 vec3 volumetric(vec3 ro, vec3 rd, float tmax, vec2 frag){
-  vec3 S = searchOrigin(), D = searchDir();
-  vec3 w = ro - S;
-  float b = dot(rd, D), d1 = dot(rd, w), d2 = dot(D, w);
-  float den = 1.0 - b*b;
-  float tc = abs(den) > 1e-4 ? (b*d2 - d1) / den : 0.5*tmax;      // closest approach along the view ray
-  float t0 = clamp(tc - 26.0, 0.0, tmax), t1 = clamp(tc + 26.0, 0.0, tmax);
-  if (t1 - t0 < 1.0) return vec3(0.0);
-  float dt = (t1 - t0) / 8.0;
-  float t = t0 + dt * hash21(frag);
+  // A uniform march. The old version integrated a window around the ray's closest approach to the beam
+  // axis, which degenerates when you look straight up the beam: every branch guarding that case drew its
+  // own hard-edged circle around the lamp. Marching the whole visible span has no such boundaries.
+  vec3 S = searchOrigin();
+  float tEnd = min(tmax, 300.0);
+  float dt = tEnd / 12.0;
+  float t = dt * ign(frag);
   float acc = 0.0;
-  for (int i = 0; i < 8; i++){
+  for (int i = 0; i < 12; i++){
     vec3 p = ro + rd*t;
     float bm = beamAt(p);
     if (bm > 0.002){
       vec3 toL = normalize(S - p);
-      float sh = clamp(map(p) / 1.5, 0.0, 1.0) * clamp(map(p + toL*6.0) / 3.0, 0.0, 1.0);   // crude shadowing by buildings
+      float sh = distance(p, S) < 5.0 ? 1.0                                                  // never shadow the lamp with itself
+               : clamp(mapCoarse(p) / 1.5, 0.0, 1.0) * clamp(mapCoarse(p + toL*6.0) / 3.0, 0.0, 1.0);
       acc += bm * sh * exp(-0.04*max(p.y, 0.0)) * dt;
     }
     t += dt;
   }
-  return vec3(0.55, 0.72, 1.0) * min(acc, 10.0) * 0.03 * uParams.y;
+  vec3 vS = S - ro; float dS = max(length(vS), 1e-3);                                        // the housing glows through the rain
+  float ca = dot(rd, vS / dS);
+  if (ca > 0.0) acc += 4.0 * exp(-0.004*dS) / (1.0 + 900.0*max(0.0, 1.0 - ca*ca));
+  return vec3(0.55, 0.72, 1.0) * min(acc, 7.0) * 0.019 * uParams.y;
 }
+
 
 vec3 render(vec3 ro, vec3 rd, vec2 uv){
   vec2 h = raymarch(ro, rd);
@@ -1536,6 +1544,9 @@ void main(){
     float l3 = dot(col, vec3(0.2126, 0.7152, 0.0722));
     col += (1.0 - l3) * vec3(-0.012, 0.004, 0.014) * k + smoothstep(0.45, 1.0, l3) * vec3(0.02, 0.008, -0.012) * (uRig == 3.0 ? 1.6 : 1.0);
     if (uRig == 3.0) col = mix(vec3(0.5), col, 1.06);                                     // a touch more contrast on the tower push
+    float lift = uRig == 0.0 ? 0.060 : (uRig == 2.0 ? 0.105 : (uRig == 3.0 ? 0.030 : 0.0));   // haze-heavy rigs need their blacks back
+    float gain = uRig == 0.0 ? 1.34 : (uRig == 2.0 ? 1.34 : (uRig == 3.0 ? 1.08 : 1.0));
+    if (lift > 0.0) col = clamp((col - lift) * gain, 0.0, 1.0);
   }
   col = mix(col, texture(tHistory, uv).rgb, uBlend);            // temporal blend: a little motion blur, calmer edges
   { vec4 tx = texture(tText, uv); col = mix(col, tx.rgb, tx.a); }        // title + lyrics, printed into the frame before the grain

@@ -59,3 +59,5 @@
 - `npm run bundle` 产出 `nightcity.html`：把两首歌（base64 data URI）、歌词和 three.js 全部内嵌。**双击即可离线播放并显示歌词**。
 - 为什么必须内嵌：Chrome 给每个 file:// 文档独立的不透明源，双击打开的页面读不到同目录的 mp3——fetch 和 `<audio>` 都不行。
 - `nightcity.html` 和 `music/` 里的音频都不进仓库（.gitignore）。
+- 画面里出现锐利的圆/弧 = 某个二值判断的等值面（等距面、等深度面）。先关掉景深和 bloom 确认边缘硬软，硬边直接查 if/step，不要调参数。
+- 为退化情况加的"保护性分支"常常自己就是下一个缺陷；能用无分支的均匀步进就不要开窗采样。
