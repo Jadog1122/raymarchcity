@@ -681,7 +681,8 @@ vec3 windowLight(vec3 p, vec3 n, vec3 rd, float t, out float leak, out float fac
   {
     float neonDensity = neonDistrict(id) ? 0.45 : 0.03;
     float nh = hash21(id + face + 21.0);
-    if (nh < neonDensity && t < 90.0){
+    float neonFade = 1.0 - smoothstep(60.0, 95.0, t);          // fade out; a hard cut-off draws a visible iso-distance arc
+    if (nh < neonDensity && neonFade > 0.001){
       vec2 ctr = (id + 0.5)*CELL + lotOffset(id, hs);
       float uc = abs(n.x) > 0.5 ? p.z - ctr.y : p.x - ctr.x;
       float hw3 = abs(n.x) > 0.5 ? hs.y : hs.x;
@@ -694,25 +695,27 @@ vec3 windowLight(vec3 p, vec3 n, vec3 rd, float t, out float leak, out float fac
       vec3 neonCol = neonPalette(id);
       float flick = 0.85 + 0.15*step(0.5, hash21(vec2(floor(iTime*13.0), id.x + id.y)));     // cheap tube flicker
       flick *= 1.0 + 0.35*uAudio.z*step(0.6, hash21(id + 81.0));                            // some tubes pulse with the hi-hats
-      emit += neonCol * 4.5 * strip * flick;
-      leak += 0.5 * strip;
-      neonSpill += neonCol * strip;
+      emit += neonCol * 4.5 * strip * flick * neonFade;
+      leak += 0.5 * strip * neonFade;
+      neonSpill += neonCol * strip * neonFade;
     }
   }
   {                                                                   // holographic billboard on tall neon-district buildings
     vec2 ctr = (id + 0.5)*CELL + lotOffset(id, hs);
     float uc = abs(n.x) > 0.5 ? p.z - ctr.y : p.x - ctr.x;
     float hw4 = abs(n.x) > 0.5 ? hs.y : hs.x;
-    if (hash21(id + face + 94.0) < 0.5 && t < 120.0){ float mk; vec3 hb = holoBoard(id, uc, p.y, hw4, ht, mk); emit += hb; leak += 0.4*mk; neonSpill += neonPalette(id) * mk; }
+    float holoFade = 1.0 - smoothstep(85.0, 125.0, t);
+    if (hash21(id + face + 94.0) < 0.5 && holoFade > 0.001){ float mk; vec3 hb = holoBoard(id, uc, p.y, hw4, ht, mk); emit += hb * holoFade; leak += 0.4*mk*holoFade; neonSpill += neonPalette(id) * mk * holoFade; }
   }
   // ground floor: a wide, dim shop front on some faces (the only light at street level besides the lamps)
-  if (p.y > 0.4 && p.y < 1.15 && t < 80.0 && hash21(id + face + 8.8) < 0.4){
+  float shopFade = 1.0 - smoothstep(55.0, 85.0, t);
+  if (p.y > 0.4 && p.y < 1.15 && shopFade > 0.001 && hash21(id + face + 8.8) < 0.4){
     vec2 ctr = (id + 0.5)*CELL + lotOffset(id, hs);
     float uc = abs(n.x) > 0.5 ? p.z - ctr.y : p.x - ctr.x;
     float hw2 = abs(n.x) > 0.5 ? hs.y : hs.x;
     float win = smoothstep(0.0, 0.15, hw2*0.45 - abs(uc)) * smoothstep(0.45, 0.55, p.y) * smoothstep(1.15, 1.05, p.y);
-    emit += vec3(1.0, 0.72, 0.45) * 0.12 * win * (0.6 + 0.4*hash21(floor(vec2(uc*2.0, 0.0)) + id));
-    leak += 0.25 * win;
+    emit += vec3(1.0, 0.72, 0.45) * 0.12 * win * shopFade * (0.6 + 0.4*hash21(floor(vec2(uc*2.0, 0.0)) + id));
+    leak += 0.25 * win * shopFade;
   }
   float lod = smoothstep(15.0, 60.0, t);                            // far: average, no sparkle
   // facade relief: floor slabs, mullions between window columns, a lighter parapet at the top
@@ -911,7 +914,7 @@ vec4 fxaa(vec2 uv){
   vec3 cSW = texture(tScene, uv + vec2(-1.0,  1.0)*inv).rgb, cSE = texture(tScene, uv + vec2(1.0,  1.0)*inv).rgb;
   float lNW = lumaTM(cNW), lNE = lumaTM(cNE), lSW = lumaTM(cSW), lSE = lumaTM(cSE), lM = lumaTM(cM.rgb);
   float lMin = min(lM, min(min(lNW, lNE), min(lSW, lSE))), lMax = max(lM, max(max(lNW, lNE), max(lSW, lSE)));
-  if (lMax - lMin < 0.04 || uAA < 0.5) return cM;                    // flat: nothing to do
+  if (lMax - lMin < 0.04 || uAA < 0.5 || uTaa > 0.5) return cM;      // flat, disabled, or TAA already supersamples
   vec2 dir = vec2(-((lNW + lNE) - (lSW + lSE)), ((lNW + lSW) - (lNE + lSE)));
   float dirReduce = max((lNW + lNE + lSW + lSE) * (0.25 * 0.125), 1.0 / 128.0);
   float rcp = 1.0 / (min(abs(dir.x), abs(dir.y)) + dirReduce);
@@ -919,7 +922,10 @@ vec4 fxaa(vec2 uv){
   vec3 rgbA = 0.5 * (texture(tScene, uv + dir*(1.0/3.0 - 0.5)).rgb + texture(tScene, uv + dir*(2.0/3.0 - 0.5)).rgb);
   vec3 rgbB = rgbA*0.5 + 0.25 * (texture(tScene, uv - dir*0.5).rgb + texture(tScene, uv + dir*0.5).rgb);
   float lB = lumaTM(rgbB);
-  return vec4((lB < lMin || lB > lMax) ? rgbA : rgbB, cM.a);
+  vec3 out3 = (lB < lMin || lB > lMax) ? rgbA : rgbB;
+  vec3 nMin = min(cM.rgb, min(min(cNW, cNE), min(cSW, cSE)));
+  vec3 nMax = max(cM.rgb, max(max(cNW, cNE), max(cSW, cSE)));
+  return vec4(clamp(out3, nMin, nMax), cM.a);                        // never brighter/darker than the taps it came from
 }
 // scene fetch with bokeh depth of field: circle of confusion from the distance to the focus plane, 12-tap disc; centre tap anti-aliased
 vec3 fetchScene(vec2 uv){
@@ -927,7 +933,7 @@ vec3 fetchScene(vec2 uv){
   float d = c.a * 320.0;
   float coc = d > uFocus ? (1.0 - uFocus / d) * uAperture * 1.6 : (uFocus - d) / max(uFocus, 1.0) * uAperture * 2.0;   // far: gentle; near: stronger
   coc = clamp(coc, 0.0, 3.5);
-  if (coc < 0.6) return c.rgb;
+  if (coc < 0.35) return c.rgb;
   vec3 s = c.rgb; float w = 1.0;
   for (int i = 0; i < 12; i++){
     float a = float(i) * 2.39996 + hash21(gl_FragCoord.xy + float(i)) * 0.3;
@@ -938,7 +944,7 @@ vec3 fetchScene(vec2 uv){
     float tw = (td < d + 2.0 || abs(td - uFocus) > abs(d - uFocus)) ? 1.0 : 0.3;       // don't let sharp background bleed into a blurred foreground
     s += t.rgb * tw; w += tw;
   }
-  return s / w;
+  return mix(c.rgb, s / w, smoothstep(0.35, 1.1, coc));            // fade the blur in, so the threshold leaves no seam
 }
 vec3 tent(vec2 uv, float lod){
   vec2 ts = exp2(lod) / uBrightRes;

@@ -46,3 +46,6 @@
 - 跟随媒体时间的显示（歌词等）挂在媒体时钟上（timeupdate + 独立定时器），绝不挂渲染循环；渲染只在 `document.hidden` 时暂停，`blur` 不暂停。
 - `if (!TEST)` 包裹的代码 verify 覆盖不到：verify 必须另有一条不带 test 参数的真实页面冒烟检查（pageerror 即失败 + 歌单/歌词断言）。
 - 本地服务用 `npm run serve`（tools/serve.mjs，支持 Range）；python http.server 会让音频跳转静默失败。
+- 任何按距离的硬分支（景深阈值、LOD、效果开关）都会在屏幕上画出一条弧——等距面在平面上是圆锥曲线。一律用 smoothstep 过渡。
+- 抗锯齿在色调映射之后做；在 HDR 上做 FXAA 会把高光沿边缘拖成 1 像素镶边。TAA 开启时不要再叠 FXAA。
+- 二分调试时确认调试输出真的跳过了被测代码（`fetchScene` 里藏着 FXAA 和景深，"只输出场景"并不等于绕过后期）。
