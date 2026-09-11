@@ -43,7 +43,7 @@ for (let i = 0; i < n; i++) {
     lyric: (window.__text && window.__text.lyric ? window.__text.lyric : '').slice(0, 18),
     hud: document.body.className || '-', paused: player.paused,
     energy: +window.__audio.val.energy.toFixed(2), bass: +window.__audio.val.bass.toFixed(2),
-    section: window.__audio.section, bpm: Math.round(window.__audio.bpm), beat: +(window.__audio.lastBeat||0).toFixed(2)
+    section: window.__audio.section, bpm: Math.round(window.__audio.bpm), conf: +(window.__audio.bpmConf||0).toFixed(2), beat: +(window.__audio.lastBeat||0).toFixed(2)
   })).catch(() => ({})));
   await page.waitForTimeout(IV - 120);
 }
