@@ -1474,6 +1474,17 @@ vec3 windowLight(vec3 p, vec3 n, vec3 rd, float t, out float leak, out float fac
     vec2 fq = fract(vec2(u, p.y) / (ws * 0.5) + 0.5);                             // a finer joint: precast panels
     dU += 0.5 * (smoothstep(0.94, 1.0, fq.x) - smoothstep(0.06, 0.0, fq.x));
     dV += 0.5 * (smoothstep(0.94, 1.0, fq.y) - smoothstep(0.06, 0.0, fq.y));
+    // Every window is a hole in a wall, not a sticker on one. A dark reveal around each pane, with its
+    // two sides tilted opposite ways so they catch light from opposite directions — without it the
+    // panes read as lit rectangles pasted onto the facade, which is exactly what they looked like.
+    vec2 inw = cls == 1 ? vec2(0.40, 0.30) : vec2(0.25, 0.30);
+    vec2 dc = f - 0.5, e0 = abs(dc) - inw, e1 = e0 - 0.085;
+    float pane  = min(smoothstep(0.015, 0.0, e0.x), smoothstep(0.015, 0.0, e0.y));
+    float outer = min(smoothstep(0.015, 0.0, e1.x), smoothstep(0.015, 0.0, e1.y));
+    float reveal = clamp(outer - pane, 0.0, 1.0);
+    dU += reveal * sign(dc.x) * 0.9;
+    dV += reveal * sign(dc.y) * 0.9;
+    facade *= 1.0 - 0.45 * reveal * (1.0 - lod);
     float rs = (cls == 1 ? 0.09 : 0.52) * (1.0 - lod);                            // glass is flat; masonry is not
     nrel = normalize(n - (T*dU + vec3(0.0, 1.0, 0.0)*dV) * rs);
   }
