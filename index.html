@@ -223,6 +223,48 @@ float signSample(vec3 p, out vec2 uvOut){
   return -1.0;
 }
 
+// A vending machine against the building line. Nothing sets the scale of a Japanese street faster:
+// everyone knows how tall one is, so the building behind it stops being an abstract box.
+bool vendOf(vec2 id, int k, out vec3 c, out vec3 e){
+  c = vec3(0.0); e = vec3(0.44, 0.76, 0.32);
+  if (riverRow(id.y)) return false;
+  if (hash21(id + 210.0 + float(k)*13.0) >= (mod(floor(id.y / 6.0), 2.0) == 1.0 ? 0.55 : 0.30)) return false;
+  vec2 hs; float ht; cellParams(id, hs, ht);
+  vec2 ctr = (id + 0.5)*CELL + lotOffset(id, hs);
+  float side = hash21(id + 221.0 + float(k)) < 0.5 ? -1.0 : 1.0;
+  float zoff = (hash21(id + 233.0 + float(k)*3.0) - 0.5) * max(hs.y - 0.6, 0.0) * 1.6 + float(k)*0.95;
+  c = vec3(ctr.x + side*(hs.x + 0.34), 0.12 + e.y, ctr.y + zoff);
+  return true;
+}
+// A car in one of the two lanes of the street on this cell's -x edge. Same timing as carLights(),
+// so the body and the pool of light it throws on the road belong to each other.
+bool carOf(vec2 id, int lane, out vec3 c, out vec3 e, out float dir){
+  c = vec3(0.0); e = vec3(0.70, 0.34, 1.65); dir = 1.0;
+  if (riverRow(id.y)) return false;
+  if (id.x == 0.0 && lane != 0) return false;                 // keep the camera's own lane clear, but not the oncoming one
+  dir = lane == 0 ? 1.0 : -1.0;
+  vec2 seed = vec2(id.x*1.7, float(lane));
+  float P  = 26.0 + 12.0*hash21(seed);
+  float sp = 8.0 + 6.0*hash21(seed + 4.0);
+  float c0 = dir*iTime*sp + 100.0*hash21(seed + 8.0);
+  float zc = (id.y + 0.5)*CELL;
+  float n  = floor((zc - c0) / P + 0.5);
+  if (hash21(seed + n*0.31 + 12.0) > 0.5) return false;
+  c = vec3(id.x*CELL + dir*0.95, 0.12 + e.y, c0 + n*P);
+  return true;
+}
+float streetPropsSDF(vec2 id, vec3 p, inout int mat){
+  float d = 1e5;
+  for (int k = 0; k < 2; k++){ vec3 c, e; if (vendOf(id, k, c, e)){ float v = sdBox(p - c, e); if (v < d){ d = v; mat = 9; } } }
+  for (int k = 0; k < 2; k++){ vec3 c, e; float dr;
+    if (carOf(id, k, c, e, dr)){
+      float b = sdBox(p - c, e);
+      b = min(b, sdBox(p - c - vec3(0.0, e.y*0.85, -0.15*dr), vec3(e.x*0.78, e.y*0.55, e.z*0.48)));   // cabin
+      if (b < d){ d = b; mat = 10; }
+    } }
+  return d;
+}
+
 // A skybridge from this cell toward +x (axis 0) or +z (axis 1), if both neighbours can carry one.
 bool bridgeOf(vec2 id, int axis, out float by, out float hw, out float span0, out float span1, out float perp){
   by = 0.0; hw = 0.6; span0 = 0.0; span1 = 0.0; perp = 0.0;
@@ -340,6 +382,7 @@ float lotSDF(vec2 id, vec3 p, out int mat){                    // the building(s
   }
   float sg = signsSDF(id, p);
   if (sg < b){ b = sg; mat = 8; }                               // shop signs
+  if (p.y < 2.6){ int pm = mat; float pd = streetPropsSDF(id, p, pm); if (pd < b){ b = pd; mat = pm; } }   // street furniture and traffic
   if (metal < b){ b = metal; mat = 7; }                         // pipes, tanks and vent stacks read as metal
   if (br < b){ b = br; mat = 7; }                               // so do the skybridges
   return b;
@@ -532,6 +575,16 @@ float traceDDA(vec3 ro, vec3 rd, float tmax){
         vec3 lo = axis == 0 ? vec3(s0, by - hw, perp - hw) : vec3(perp - hw, by - hw, s0);
         vec3 hi = axis == 0 ? vec3(s1, by + hw, perp + hw) : vec3(perp + hw, by + hw, s1);
         best = min(best, hitBox(ro, rd, lo, hi, tCur, tLim));
+      }
+      if (yLo < 2.7){                                              // street furniture and traffic, all inside the kerb band
+        for (int k = 0; k < 2; k++){ vec3 c, e;
+          if (vendOf(cell, k, c, e)) best = min(best, hitBox(ro, rd, c - e, c + e, tCur, tLim)); }
+        for (int k = 0; k < 2; k++){ vec3 c, e; float dr;
+          if (carOf(cell, k, c, e, dr)){
+            best = min(best, hitBox(ro, rd, c - e, c + e, tCur, tLim));
+            vec3 cc = c + vec3(0.0, e.y*0.85, -0.15*dr), ce = vec3(e.x*0.78, e.y*0.55, e.z*0.48);
+            best = min(best, hitBox(ro, rd, cc - ce, cc + ce, tCur, tLim));
+          } }
       }
       if (yLo < 3.3){                                              // the two street lamps of this cell (post as a thin box, head box)
         for (int k = 0; k < 2; k++){
@@ -1002,7 +1055,34 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float t, int mat, bool cheap){
   vec3 alb = (mat == 2) ? vec3(0.010, 0.012, 0.015) : vec3(0.040, 0.055, 0.075);   // wet asphalt is black; facades deep teal-blue
   if (mat == 5) alb *= 0.8;
   float rough = 1.0, glassy = 0.0, facadeRelief = 1.0;
+  vec3 wEmit = vec3(0.0), neon = vec3(0.0); float leak = 0.0;
   if (mat == 7){ alb = vec3(0.055, 0.058, 0.062); rough = 0.45; glassy = 0.25; }   // galvanised metal: pipes, tanks, bridges
+  if (mat == 9){                                                                  // vending machine: a lit box on the pavement
+    vec2 bid = floor(p.xz / CELL);
+    float panel = step(0.5, abs(n.x)) * step(0.28, p.y - 0.12) * step(p.y, 1.52);
+    vec3 lit = mix(vec3(0.95, 0.98, 1.0), vec3(1.0, 0.58, 0.30), step(0.5, hash21(bid + 244.0)));
+    float slot = 1.0 - 0.45*step(0.86, fract(p.y * 3.1));                          // product shelves banding the front
+    vec3 outc = mix(vec3(0.05, 0.052, 0.056), lit * 1.15 * slot, panel) + vec3(0.015);
+    float fd = 0.009 * uParams.y * exp(-0.06*max(p.y, 0.0));
+    return mix(outc, skyBase(rd) * vec3(0.75, 0.95, 1.2), 1.0 - exp(-fd*t));
+  }
+  if (mat == 10){                                                                 // car: dark glossy shell with its lamps lit
+    alb = vec3(0.030, 0.032, 0.038); rough = 0.22; glassy = 0.55;
+    if (abs(n.z) > 0.5){
+      vec2 bid = floor(p.xz / CELL);
+      for (int k = 0; k < 2; k++){
+        vec3 cc, ce; float dr;
+        if (!carOf(bid, k, cc, ce, dr)) continue;
+        vec3 q = abs(p - cc) - ce;
+        if (max(q.x, max(q.y, q.z)) > 0.06) continue;
+        float band = step(0.30, p.y - (cc.y - ce.y)) * step(p.y, cc.y + ce.y*0.25);
+        float outer = step(0.42, abs(p.x - cc.x) / ce.x);                          // lamps sit at the corners
+        float head = step(0.0, n.z * dr), tail = 1.0 - head;
+        wEmit += (vec3(1.0, 0.94, 0.84) * 3.4 * head + vec3(1.0, 0.07, 0.03) * 1.1 * tail) * band * outer;
+        break;
+      }
+    }
+  }
   if (mat == 8){                                                                  // shop sign: printed faces glow, edges are frame
     vec2 suv; float ai = signSample(p, suv);
     vec3 frame = vec3(0.10, 0.105, 0.11);
@@ -1017,7 +1097,6 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float t, int mat, bool cheap){
     float fogd = 0.009 * uParams.y * exp(-0.06*max(p.y, 0.0));
     return mix(outc, skyBase(rd) * vec3(0.75, 0.95, 1.2), 1.0 - exp(-fogd*t));
   }
-  vec3 wEmit = vec3(0.0), neon = vec3(0.0); float leak = 0.0;
   if (mat == 1 || mat == 5){
     vec2 bid = floor(p.xz / CELL);
     int cls = matClassOf(bid);
