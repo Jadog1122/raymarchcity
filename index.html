@@ -98,6 +98,8 @@ uniform vec2  uBeatAge;      // seconds since the last two beats (99 = none)
 uniform float uFlashAge;     // seconds since the last lightning (rare: every 8th beat or an energy peak)
 uniform vec4  uMood;         // rain, quiet(0..1 slow energy), beam strength at the camera, fade
 uniform vec2  uSection;      // section id (0 verse, 1 build, 2 drop, 3 breakdown), seconds in it
+uniform sampler2D tSigns;    // atlas of shop signs, one per cell
+uniform vec2  uSignGrid;
 uniform float uPath;         // 1 = grid-walk tracer, 0 = reference sphere-trace
 uniform vec3  uCamRo, uCamRt, uCamUp, uCamFw;
 uniform float uFocal;
@@ -181,6 +183,46 @@ int archOf(vec2 id){
   float a = hash21(id + 51.7);
   return a < 0.20 ? 1 : (a < 0.38 ? 2 : (a < 0.52 ? 3 : (a < 0.66 ? 4 : 0)));
 }
+// One 袖看板: an internally lit box projecting perpendicular from the facade, stacked one per tenant
+// floor. The street runs along z, so the box sticks out along x and its two printed faces look up and
+// down the street — which is how you actually read them while walking.
+bool signOf(vec2 id, int k, out vec3 c, out vec3 e, out float atlasIdx){
+  c = vec3(0.0); e = vec3(0.36, 1.05, 0.05); atlasIdx = 0.0;
+  if (riverRow(id.y)) return false;
+  vec2 hs; float ht; cellParams(id, hs, ht);
+  if (ht < 6.0) return false;
+  float dens = (mod(floor(id.y / 6.0), 2.0) == 1.0) ? 0.85 : 0.18;   // the neon bands are papered with them; ordinary streets stay sparse
+  if (hash21(id + 140.0 + float(k)*11.0) >= dens) return false;
+  float y = 2.9 + 2.5*float(k);
+  if (y + 1.2 > ht) return false;
+  vec2 ctr = (id + 0.5)*CELL + lotOffset(id, hs);
+  float side = hash21(id + 151.0 + float(k)*3.0) < 0.5 ? -1.0 : 1.0;
+  float zoff = (hash21(id + 163.0 + float(k)*5.0) - 0.5) * max(hs.y - 0.4, 0.0) * 1.4;
+  c = vec3(ctr.x + side*(hs.x + 0.34), y, ctr.y + zoff);
+  atlasIdx = floor(hash21(id + 177.0 + float(k)*7.0) * 31.999);
+  return true;
+}
+float signsSDF(vec2 id, vec3 p){
+  float d = 1e5;
+  for (int k = 0; k < 3; k++){ vec3 c, e; float ai; if (signOf(id, k, c, e, ai)) d = min(d, sdBox(p - c, e)); }
+  return d;
+}
+// Which sign a shaded point belongs to, and where on its printed face it sits.
+float signSample(vec3 p, out vec2 uvOut){
+  uvOut = vec2(0.5);
+  vec2 id = floor(p.xz / CELL);
+  for (int k = 0; k < 3; k++){
+    vec3 c, e; float ai;
+    if (!signOf(id, k, c, e, ai)) continue;
+    vec3 q = abs(p - c) - e;
+    if (max(q.x, max(q.y, q.z)) < 0.03){
+      uvOut = vec2((p.x - c.x) / e.x * 0.5 + 0.5, 0.5 - (p.y - c.y) / e.y * 0.5);
+      return ai;
+    }
+  }
+  return -1.0;
+}
+
 // A skybridge from this cell toward +x (axis 0) or +z (axis 1), if both neighbours can carry one.
 bool bridgeOf(vec2 id, int axis, out float by, out float hw, out float span0, out float span1, out float perp){
   by = 0.0; hw = 0.6; span0 = 0.0; span1 = 0.0; perp = 0.0;
@@ -296,6 +338,8 @@ float lotSDF(vec2 id, vec3 p, out int mat){                    // the building(s
       metal = min(metal, sdCylY(lp, ro2 + vec2(rs.x*0.6, 0.0), 0.09, ht + rh, ht + rh + 1.1));   // vent stack
     }
   }
+  float sg = signsSDF(id, p);
+  if (sg < b){ b = sg; mat = 8; }                               // shop signs
   if (metal < b){ b = metal; mat = 7; }                         // pipes, tanks and vent stacks read as metal
   if (br < b){ b = br; mat = 7; }                               // so do the skybridges
   return b;
@@ -411,7 +455,7 @@ float traceDDA(vec3 ro, vec3 rd, float tmax){
       // one conservative bound for the whole lot (building + canopy + pipes + roof clutter).
       // Rays travelling down a street pass most blocks without touching them; rejecting those with a
       // single box test instead of a dozen primitive tests is the difference between 120 ms and 15 ms.
-      vec2 lotB = boxHit(ro, rd, vec3(bc.x - hs.x - 0.5, -0.05, bc.y - hs.y - 0.5), vec3(bc.x + hs.x + 0.5, ht + 8.0, bc.y + hs.y + 0.5));
+      vec2 lotB = boxHit(ro, rd, vec3(bc.x - hs.x - 0.85, -0.05, bc.y - hs.y - 0.6), vec3(bc.x + hs.x + 0.85, ht + 8.0, bc.y + hs.y + 0.6));
       if (lotB.x < lotB.y && lotB.x < tLim && lotB.y > tCur){
         if (arch == 5){                                           // setback tower: three nested tiers + antenna + beacon
           best = min(best, hitBox(ro, rd, vec3(bc.x - hs.x, 0.0, bc.y - hs.y), vec3(bc.x + hs.x, ht*0.6, bc.y + hs.y), tCur, tLim));
@@ -447,6 +491,10 @@ float traceDDA(vec3 ro, vec3 rd, float tmax){
           }
         } else {                                                  // plain slab
           best = min(best, hitBox(ro, rd, vec3(bc.x - hs.x, 0.0, bc.y - hs.y), vec3(bc.x + hs.x, ht, bc.y + hs.y), tCur, tLim));
+        }
+        if (yLo < 12.0){                                          // 袖看板 projecting from the facade
+          for (int k = 0; k < 3; k++){ vec3 sc, se; float ai;
+            if (signOf(cell, k, sc, se, ai)) best = min(best, hitBox(ro, rd, sc - se, sc + se, tCur, tLim)); }
         }
         if (hash21(cell + 33.1) < 0.45){                          // external pipe bundle up one face
           float side = hash21(cell + 34.7);
@@ -955,6 +1003,20 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float t, int mat, bool cheap){
   if (mat == 5) alb *= 0.8;
   float rough = 1.0, glassy = 0.0, facadeRelief = 1.0;
   if (mat == 7){ alb = vec3(0.055, 0.058, 0.062); rough = 0.45; glassy = 0.25; }   // galvanised metal: pipes, tanks, bridges
+  if (mat == 8){                                                                  // shop sign: printed faces glow, edges are frame
+    vec2 suv; float ai = signSample(p, suv);
+    vec3 frame = vec3(0.10, 0.105, 0.11);
+    if (ai < 0.0) return frame * 0.4;
+    float ci = mod(ai, uSignGrid.x), ri = floor(ai / uSignGrid.x);
+    vec2 auv = (vec2(ci, ri) + clamp(suv, 0.012, 0.988)) / uSignGrid;
+    vec3 sc = texture(tSigns, auv).rgb;
+    float printed = step(0.5, abs(n.z));
+    float lit = hash21(floor(p.xz / CELL) + 191.0 + ai) < 0.14 ? 0.10 : 1.0;       // a few are dark
+    float flick = 1.0 - 0.10*step(0.88, hash21(vec2(floor(iTime*9.0), ai)));
+    vec3 outc = mix(frame * 0.5, sc * 1.3 * lit * flick, printed);
+    float fogd = 0.009 * uParams.y * exp(-0.06*max(p.y, 0.0));
+    return mix(outc, skyBase(rd) * vec3(0.75, 0.95, 1.2), 1.0 - exp(-fogd*t));
+  }
   vec3 wEmit = vec3(0.0), neon = vec3(0.0); float leak = 0.0;
   if (mat == 1 || mat == 5){
     vec2 bid = floor(p.xz / CELL);
@@ -1413,6 +1475,50 @@ const rtBright = new THREE.WebGLRenderTarget(2, 2, {              // half-res br
   depthBuffer: false, stencilBuffer: false, type: THREE.HalfFloatType, generateMipmaps: true
 });
 
+// ---------- signage atlas ----------
+// Japanese street signage is mostly 袖看板: internally lit boxes that stick out perpendicular from the
+// facade, one per tenant floor, text running top to bottom. Generic trade words only, no real marks.
+const SIGN_COLS = 8, SIGN_ROWS = 4, SIGN_CW = 128, SIGN_CH = 512;
+const SIGN_WORDS = [
+  ['居酒屋', '#e8203a', '#fff2d8'], ['ラーメン', '#f2c200', '#241400'], ['カラオケ', '#e0197a', '#ffe8f4'],
+  ['焼肉', '#d41414', '#ffe0b0'],   ['スナック', '#7b2ff2', '#f0e4ff'], ['喫茶', '#1f9c6a', '#eafff4'],
+  ['薬', '#12a0d8', '#eaf8ff'],     ['寿司', '#1a2a6c', '#ffffff'],     ['酒場', '#c8102e', '#ffd9a0'],
+  ['麺処', '#ff6a00', '#2a1200'],   ['鉄板焼', '#a3122b', '#ffe7c2'],   ['串カツ', '#f5a300', '#2a1a00'],
+  ['純喫茶', '#0f7a8a', '#e6fbff'], ['中華', '#e02020', '#ffe08a'],     ['美容室', '#d63b8c', '#fff0f8'],
+  ['バー', '#111827', '#8ae6ff'],   ['定食', '#c46a00', '#fff3dd'],     ['両替', '#0a7d3f', '#e9ffe9'],
+  ['24時間', '#e8203a', '#ffffff'], ['営業中', '#f2c200', '#241400'],   ['年中無休', '#1f6feb', '#eaf2ff'],
+  ['地下一階', '#4b5563', '#e5e7eb'],['貸室あり', '#b45309', '#fff7e0'], ['生ビール', '#eab308', '#1a1200'],
+  ['麻雀', '#166534', '#dcfce7'],   ['銭湯', '#0369a1', '#e0f2fe'],     ['古書', '#7c2d12', '#fde68a'],
+  ['写真', '#312e81', '#c7d2fe'],   ['電器', '#b91c1c', '#fee2e2'],     ['質', '#facc15', '#1c1917'],
+  ['ホテル', '#be185d', '#fce7f3'], ['駐車場', '#1e40af', '#dbeafe']
+];
+const signCanvas = document.createElement('canvas');
+signCanvas.width = SIGN_COLS * SIGN_CW; signCanvas.height = SIGN_ROWS * SIGN_CH;
+{
+  const g = signCanvas.getContext('2d');
+  g.clearRect(0, 0, signCanvas.width, signCanvas.height);
+  const FONT = '"Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif';
+  SIGN_WORDS.forEach((w, i) => {
+    if (i >= SIGN_COLS * SIGN_ROWS) return;
+    const cx = (i % SIGN_COLS) * SIGN_CW, cy = Math.floor(i / SIGN_COLS) * SIGN_CH;
+    const [text, bg, fg] = w;
+    g.save(); g.translate(cx, cy);
+    g.fillStyle = bg; g.fillRect(4, 4, SIGN_CW - 8, SIGN_CH - 8);              // acrylic panel
+    g.strokeStyle = 'rgba(255,255,255,0.55)'; g.lineWidth = 3;
+    g.strokeRect(6, 6, SIGN_CW - 12, SIGN_CH - 12);                            // aluminium frame
+    const chars = [...text];
+    const size = Math.min(SIGN_CW - 30, (SIGN_CH - 40) / chars.length);
+    g.font = `700 ${Math.round(size)}px ${FONT}`;
+    g.fillStyle = fg; g.textAlign = 'center'; g.textBaseline = 'middle';
+    const step = (SIGN_CH - 30) / chars.length;
+    chars.forEach((ch, k) => g.fillText(ch, SIGN_CW / 2, 15 + step * (k + 0.5)));
+    g.restore();
+  });
+}
+const signTex = new THREE.CanvasTexture(signCanvas);
+signTex.minFilter = THREE.LinearMipmapLinearFilter; signTex.magFilter = THREE.LinearFilter;
+signTex.generateMipmaps = true; signTex.anisotropy = 4; signTex.needsUpdate = true;
+
 const uniforms = {
   iTime:       { value: 0 },
   iResolution: { value: new THREE.Vector2(1, 1) },
@@ -1428,7 +1534,8 @@ const uniforms = {
   uPath:       { value: params.get('path') === '0' ? 0 : 1 },
   uCamRo: { value: new THREE.Vector3() }, uCamRt: { value: new THREE.Vector3() }, uCamUp: { value: new THREE.Vector3() }, uCamFw: { value: new THREE.Vector3() },
   uFocal: { value: 1.7 }, uJitter: { value: new THREE.Vector2() },
-  uSection: { value: new THREE.Vector2(0, 0) }
+  uSection: { value: new THREE.Vector2(0, 0) },
+  tSigns: { value: signTex }, uSignGrid: { value: new THREE.Vector2(SIGN_COLS, SIGN_ROWS) }
 };
 const beatTimes = [-99, -99];
 let beatCount = 0, flashTime = -99, slowEnergy = 0.5, dropTime = -99;

@@ -207,7 +207,10 @@ if (!(dark5 < 0.03)) fails.push(`dark5 ${dark5.toFixed(3)} >= 0.03 (no true blac
 if (!(bright1 > 0.9)) fails.push(`bright1 ${bright1.toFixed(3)} <= 0.9 (no highlights)`);
 if (!(warmPct <= 12)) fails.push(`warm ${warmPct.toFixed(1)}% > 12% (two-colour rule broken)`);
 const CENTROID_MIN = +(process.env.CENTROID_MIN ?? '3'), BLOBS_MAX = +(process.env.BLOBS_MAX ?? '150');
-const BRIGHT_AREA_MAX = +(process.env.BRIGHT_AREA_MAX ?? '1.6');   // the real light-hierarchy test: how much of the frame is a light
+// How much of the frame is a light. Raised deliberately as the art direction changed: ribbon glazing on
+// curtain walls (M12) and the client-requested Japanese signage layer (M14) both add lit area on purpose.
+// Pre-M12 this frame sat at 1.07 %. It is still a cap, not a licence: 98 % of the frame is not a light.
+const BRIGHT_AREA_MAX = +(process.env.BRIGHT_AREA_MAX ?? '1.9');
 if (BRIGHT_AREA_MAX > 0 && !(brightPct <= BRIGHT_AREA_MAX)) fails.push(`bright area ${brightPct.toFixed(2)}% > ${BRIGHT_AREA_MAX}% (too much of the frame is lit)`);
 if (CENTROID_MIN > 0 && !(centroidPct >= CENTROID_MIN)) fails.push(`centroid ${centroidPct.toFixed(1)}% < ${CENTROID_MIN}% (composition too centred)`);
 if (BLOBS_MAX > 0 && !(blobs <= BLOBS_MAX)) fails.push(`highlight blobs ${blobs} > ${BLOBS_MAX} (no light hierarchy)`);
