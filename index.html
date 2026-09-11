@@ -946,6 +946,13 @@ float calcAO(vec3 p, vec3 n){
   return clamp(1.0 - 1.2*occ, 0.0, 1.0);
 }
 
+// The moon's direction. It is also the key light, so what the sky shows and what lights the city are
+// the same thing. 19 deg up, 36 deg to the left of travel: measured, not guessed — on a 2.39:1 frame
+// an off-axis direction is foreshortened upward, and at 35 deg the moon sat above the top edge of
+// every rig while its own light was still falling on the city.
+#define MOON_DIR normalize(vec3(0.556, 0.326, 0.765))
+#define MOON_R   0.018                                   // angular radius: about three times life size, which is what a
+                                                       // long lens does to it and what every night sky in a film looks like
 vec3 skyBase(vec3 rd){
   float y = clamp(rd.y, 0.0, 1.0);
   vec3 top = vec3(0.0006, 0.0012, 0.0035);
@@ -1004,19 +1011,99 @@ vec3 lampGlow(vec3 ro, vec3 rd, float tmax){
 }
 
 // Low cloud deck at y = 60, lit from below by the city; the searchlight paints it when it sweeps up.
-vec3 skyColor(vec3 rd){
-  vec3 base = skyBase(rd);
-  if (rd.y < 0.02) return base;
-  float dist = (60.0 - gRo.y) / rd.y;
+// One layer of cloud, projected onto a plane at height h. Two of these at different heights and
+// drift speeds give the sky parallax, which is what stops it reading as a flat backdrop.
+float cloudLayer(vec3 rd, float h, vec2 drift, float sc, float lo, float hi, out vec3 cpos, out float dist){
+  dist = (h - gRo.y) / max(rd.y, 1e-4);
   vec2 cp = gRo.xz + rd.xz * dist;
-  vec3 cpos = vec3(cp.x, 60.0, cp.y);
-  cp += vec2(iTime*1.2, iTime*0.5);
-  float nz = 0.5*vnoise(cp*0.018) + 0.28*vnoise(cp*0.041 + 7.3) + 0.14*vnoise(cp*0.095 + 3.1);
-  float dens = smoothstep(0.40, 0.66, nz);
-  float fade = smoothstep(0.02, 0.22, rd.y) * exp(-dist*0.0025);       // thins toward the horizon, far clouds dissolve
-  vec3 cloud = vec3(0.024, 0.021, 0.019) * (1.0 + 1.2*(1.0 - rd.y));   // city light pollution on the underside
-  cloud += vec3(0.55, 0.72, 1.0) * 0.5 * beamAt(cpos);
-  return mix(base, cloud, dens * fade * 0.9);
+  cpos = vec3(cp.x, h, cp.y);
+  if (dist <= 0.0) return 0.0;                  // camera already above this deck: looking up, it is not there
+  cp += drift * iTime;
+  float nz = 0.5*vnoise(cp*sc) + 0.28*vnoise(cp*sc*2.3 + 7.3) + 0.14*vnoise(cp*sc*5.3 + 3.1);
+  return smoothstep(lo, hi, nz);
+}
+// The moon sits exactly where the key light comes from, so the sky and the lighting agree with each
+// other. Drawn near life size: the first version was two degrees across and clipped to white, which
+// reads as a lamp, not a moon. Limb darkening, a gibbous terminator and a little maria keep the disc
+// from being a flat hole, and they only survive because the disc no longer saturates.
+vec3 moonDisc(vec3 rd){
+  if (dot(rd, MOON_DIR) < 0.9997) return vec3(0.0);          // outside 1.4 deg there is only halo
+  vec3 mx = normalize(cross(vec3(0.0, 1.0, 0.0), MOON_DIR));
+  vec3 my = cross(MOON_DIR, mx);
+  vec2 p = vec2(dot(rd, mx), dot(rd, my)) / MOON_R;          // disc coordinates, 1.0 at the limb
+  float r2 = dot(p, p);
+  if (r2 > 1.0) return vec3(0.0);
+  float z = sqrt(1.0 - r2);                                  // the sphere, seen flat
+  float limb  = 0.40 + 0.60*pow(z, 0.50);
+  float phase = smoothstep(-0.10, 0.30, p.x*0.62 + z*0.78);  // gibbous, lit from the right
+  float maria = mix(0.62, 1.0, smoothstep(0.36, 0.66, vnoise(p*2.3 + 40.0))) * mix(0.86, 1.0, vnoise(p*6.1 + 12.0));
+  float edge  = 1.0 - smoothstep(0.965, 1.0, sqrt(r2));      // a soft pixel at the limb, so it never aliases
+  // Peak sits just over the bloom threshold on purpose. At 1.55 the whole disc clipped to flat white
+  // and every bit of the surface above was thrown away; the moon has to stay under the clip to be a moon.
+  return vec3(0.96, 0.96, 0.98) * (0.92 * limb * maria * max(phase, 0.05) * edge);
+}
+// The aureole humid air puts around it: tight, then wide, then a general lift of that quarter of sky.
+vec3 moonHalo(vec3 rd){
+  float c = max(dot(rd, MOON_DIR), 0.0);
+  float g = pow(c, 1500.0)*0.055 + pow(c, 120.0)*0.020 + pow(c, 18.0)*0.0035;
+  return vec3(0.80, 0.87, 1.0) * g;
+}
+// Stars, thinned by the city's own light. A grid on the cube face holds at most one star per cell,
+// placed inside the middle half of it so one cell lookup covers the whole star; the magnitudes are
+// skewed hard, so a handful read as stars and the rest as dust.
+vec3 starsAt(vec3 rd){
+  vec3 a = abs(rd);
+  vec2 uv; float face;
+  if (a.y >= a.x && a.y >= a.z)  { uv = rd.xz / a.y; face =  0.0; }
+  else if (a.x >= a.z)           { uv = rd.zy / a.x; face =  7.0; }
+  else                           { uv = rd.xy / a.z; face = 19.0; }
+  vec2 g = uv * 64.0 + face;
+  vec2 id = floor(g), f = g - id;
+  if (hash21(id + 13.3) > 0.13) return vec3(0.0);            // most cells are empty sky
+  float h1 = hash21(id + 0.5), h2 = hash21(id + 91.7);
+  float d2 = dot(f - vec2(0.25 + 0.5*h1, 0.25 + 0.5*h2), f - vec2(0.25 + 0.5*h1, 0.25 + 0.5*h2));
+  float mag = pow(hash21(id + 45.1), 5.0);                   // a few bright, many faint
+  float tw  = 0.82 + 0.18*sin(iTime*2.3 + h1*31.0);          // scintillation
+  return mix(vec3(1.0, 0.88, 0.76), vec3(0.78, 0.86, 1.0), h2) * (exp(-d2*600.0) * mag * tw * 1.25);
+}
+float flash(){ return uFlashAge < 0.1 ? 1.0 : 0.0; }               // 0.1 s lightning: the whole skyline in silhouette
+vec3 skyColor(vec3 rd){
+  // The far city burning into the haze. It belongs to the sky and not to skyBase, because skyBase is
+  // also the fog colour: put it there and every distant surface in the city gets a warm lift with it.
+  vec3 base = skyBase(rd) + vec3(0.020, 0.013, 0.008) * exp(-max(rd.y, 0.0) * 26.0);
+  if (rd.y < 0.004) return base;
+  vec3 cposHi; float distHi;
+  float densHi = cloudLayer(rd, 150.0, vec2(0.35, 0.15), 0.0062, 0.47, 0.74, cposHi, distHi);   // thin high cirrus
+  vec3 cposLo; float distLo;
+  float densLo = cloudLayer(rd, 60.0, vec2(1.2, 0.5), 0.018, 0.44, 0.70, cposLo, distLo);        // the low deck, with real breaks
+  float fadeHi = smoothstep(0.004, 0.16, rd.y) * exp(-distHi*0.0011);
+  float fadeLo = smoothstep(0.010, 0.20, rd.y) * exp(-distLo*0.0026);
+  float aHi = densHi * fadeHi * 0.55, aLo = densLo * fadeLo * 0.92;
+
+  // What the underside of a cloud shows is the district beneath it, so the glow varies across the sky.
+  int dz = districtOf(floor(cposLo.xz / CELL));
+  float amt = dz == 1 ? 1.9 : (dz == 0 ? 1.35 : (dz == 4 ? 0.45 : 0.85));
+  vec3 tint = dz == 1 ? vec3(1.0, 0.80, 0.86) : (dz == 4 ? vec3(0.85, 0.92, 1.0) : vec3(1.0, 0.94, 0.88));
+  float md = max(dot(rd, MOON_DIR), 0.0);
+  vec3 cloudLo = vec3(0.022, 0.019, 0.017) * amt * tint * (1.0 + 1.2*(1.0 - rd.y));
+  cloudLo += vec3(0.55, 0.72, 1.0) * 0.5 * beamAt(cposLo);
+  cloudLo += vec3(0.62, 0.68, 0.80) * pow(md, 40.0) * 0.22 * (1.0 - smoothstep(0.15, 0.85, densLo));  // silver lining
+  vec3 cloudHi = vec3(0.016, 0.017, 0.021) * (0.8 + 0.9*(1.0 - rd.y));
+  cloudHi += vec3(0.55, 0.60, 0.72) * pow(md, 40.0) * 0.09;
+  float fl = flash();                                   // the lightning already lit the fog; it has to come from somewhere
+  cloudLo += vec3(0.78, 0.85, 1.0) * fl * (0.10 + 0.55*densLo);
+  cloudHi += vec3(0.78, 0.85, 1.0) * fl * (0.08 + 0.40*densHi);
+
+  // Cloud first, both decks, in the order they sit. The moon and the stars are behind them, so they
+  // are attenuated by what is in front rather than punched out of it: mixing cloud over a saturated
+  // moon cut it into crescents that looked like a second object in the sky.
+  vec3 c = mix(base, cloudHi, aHi);
+  c = mix(c, cloudLo, aLo);
+  float veil = clamp(aLo*0.96 + aHi*0.40, 0.0, 1.0);
+  c += starsAt(rd) * smoothstep(0.05, 0.40, rd.y) * (1.0 - veil);
+  c += moonDisc(rd) * (1.0 - veil);
+  c += moonHalo(rd) * (1.0 - 0.6*veil);                 // the aureole is in the air in front, so some survives
+  return c;
 }
 
 // Distant traffic: headlight pools moving along the lanes of every street except the camera's own (warm only, no tail lights)
@@ -1216,7 +1303,6 @@ float ringBoost(vec3 p, float j){                                   // j: per-wi
   }
   return best * uParams.x;
 }
-float flash(){ return uFlashAge < 0.1 ? 1.0 : 0.0; }               // 0.1 s lightning: the whole skyline in silhouette
 
 // Windows: per-building type, clustered 4-class brightness, mid floors densest, warm leak onto the wall.
 // Returns emission; `leak` receives warm light spilling onto the surrounding wall (0..1).
@@ -1363,7 +1449,7 @@ vec3 shadeReflected(vec3 p, vec3 n, vec3 rd, float t, int mat){
     emit = windowLight(p, n, rd, t, lk, fc, ns);
     alb *= fc;
   }
-  vec3 L = normalize(vec3(0.45, 0.65, -0.35));
+  vec3 L = MOON_DIR;
   float dif = mix(pow(0.5 + 0.5*dot(n, L), 2.0), max(dot(n, L), 0.0), 0.7);
   vec3 col = alb * (vec3(0.45, 0.62, 0.90)*0.25*dif + vec3(0.02, 0.035, 0.06)*(0.55 + 0.45*n.y));
   col += alb * lampLight(p, n) + alb * neonLight(p, n) * 1.2 + emit;
@@ -1483,7 +1569,7 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float t, int mat, bool cheap){
     alb *= facade;
     facadeRelief = facade;
   }
-  vec3 L = normalize(vec3(0.45, 0.65, -0.35));
+  vec3 L = MOON_DIR;
   float hl = 0.5 + 0.5*dot(n, L);
   float dif = mix(hl*hl, max(dot(n, L), 0.0), 0.7);
   vec3 keyCol = vec3(0.45, 0.62, 0.90)*0.25;                                  // moon: dim, cool
@@ -1637,7 +1723,7 @@ vec3 render(vec3 ro, vec3 rd, vec2 uv){
         vec3 v = Pj - ro; float b = dot(rd, v);
         if (b > 1.0 && b < tm){
           float ang = length(v - rd*b) / b;
-          float g = min(0.00012 / (ang*ang + 3e-6), 2.5);                // small distant lights, never a blob
+          float g = 0.85 * exp(-ang*ang * 9.0e5) + 0.018 * exp(-ang*ang * 2.5e3);   // a point plus its haze, never a blob
           vec3 lc = j == 1 ? vec3(1.0, 0.15, 0.1) * step(0.5, fract(iTime*1.3)) : vec3(0.95, 0.95, 1.0);
           col += lc * g * exp(-0.004*b);
         }

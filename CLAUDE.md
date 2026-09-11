@@ -39,6 +39,10 @@
 - GLSL 哈希只用整数哈希（uint 混洗），禁止 fract(sin)/fract(大数乘积)；verify 里保留同 URL 两次加载做差的确定性检查。
 - fps 突然掉一半：先用上一 commit 的 index.html 跑一次基线，区分代码和环境。
 - verify 前看 pmset -g batt：电池模式下 fps 数字不算数。
+- 要出现在画面里的世界方向（月亮、地标、光源），先用相机基向量投影成屏幕 uv 验证再定：2.39:1 画幅纵向只有 ±1.0，偏轴方向被透视放大后很容易顶出上边缘。`tools/probe.mjs "<query>" out.png "<js>"` 渲一帧，`window.__p` 是后期 uniform 块。
+- 改 shader 函数前先 grep 调用点：skyBase 同时是雾色，改天空会静默改全城远景。
+- 把某个 pass「关掉」做对照实验前，确认开关真的覆盖它的每一项（anamorphic streak 不乘 uBloomStr）。
+- 要保留表面细节的亮物体（月面、招牌字），峰值留在 bloom 阈值附近，超过就 clip 成一片白。
 
 ## 播放器（M11）
 - `music/` 放 mp3；`node tools/scan-music.mjs` 生成 `music/manifest.json`（文件名解析歌手/曲名 + afinfo 量时长）。加 `--lyrics` 顺带检查歌词能否命中。
