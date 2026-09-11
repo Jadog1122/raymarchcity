@@ -454,7 +454,7 @@ bool carOf(vec2 id, int lane, out vec3 c, out vec3 e, out float dir){
   if (abs(cpos - zc) > CELL*0.5) return false;                // that car sits in another block; it is that block's to draw
   if (hash21(seed + n*0.31 + 12.0) > 0.72) return false;
   c = vec3(id.x*CELL + dir*streetHalf(id.x)*0.45, 0.12 + e.y, cpos);
-  float f = lensFade(c, 6.0);                                  // the lane beside the lens stays clear, but it fades out of it
+  float f = lensFade(c, 4.0);                                  // close enough that one can pass you, far enough not to fill the lens
   if (f < 0.03) return false;
   e *= f; c.y = 0.12 + e.y;
   return true;
