@@ -1704,12 +1704,47 @@ vec3 shadeReflected(vec3 p, vec3 n, vec3 rd, float t, int mat){
   float dens = 0.009 * uParams.y * (0.55 + 0.9*vnoise((p.xz + vec2(iTime*0.6, iTime*0.25)) * 0.025)) * exp(-0.06*max(p.y, 0.0));
   return mix(col, skyBase(rd) * vec3(0.75, 0.95, 1.2), 1.0 - exp(-dens*t));
 }
+// The markings of an ordinary street: a dashed centre line, a solid line along each kerb, and a
+// zebra at every crossing. The grid already knows where the streets are — north-south ones are
+// centred on x = k*CELL with streetHalf(k) to either side — so none of this needs new geometry.
+// Paint is rough, so where it lands the road stops being a mirror, which is also what lets it read
+// against the reflections instead of drowning in them.
+float roadPaint(vec3 p){
+  float k = floor(p.x / CELL + 0.5);
+  float hw = streetHalf(k);
+  float dx = abs(p.x - k*CELL);
+  if (dx > hw) return 0.0;                                    // not on a north-south street
+  // The cross-alleys sit on every cell boundary and are 3.1 m wide, so the run of open road between
+  // them is only about five metres: the centre line lives in that gap and the zebra lies in the
+  // crossing itself. Not every crossing gets one — a zebra every eight metres is a car park.
+  float nz = floor(p.z / CELL + 0.5);
+  float dz = abs(p.z - nz*CELL);
+  float paint = 0.0;
+  if (dz < 1.45){
+    if (mod(abs(nz), 3.0) < 0.5)                              // a marked crossing every third alley
+      paint = step(fract(p.x * 1.15 + 0.5), 0.52) * smoothstep(hw, hw - 0.30, dx) * smoothstep(1.45, 1.25, dz);
+  } else {
+    paint = max(paint, (1.0 - smoothstep(0.06, 0.10, dx)) * step(fract(p.z * 0.40), 0.58));    // centre dashes
+    paint = max(paint, 1.0 - smoothstep(0.05, 0.09, abs(dx - (hw - 0.34))));                   // kerb line
+    if (mod(abs(nz), 3.0) < 0.5 && dz < 1.95)
+      paint = max(paint, smoothstep(1.95, 1.75, dz) * step(0.55, dx / hw));                    // stop bar before it
+  }
+  return paint * (0.45 + 0.55*vnoise(p.xz * 1.7));            // worn, and worn unevenly
+}
 vec3 shade(vec3 p, vec3 n, vec3 rd, float t, int mat, bool cheap){
   if (mat == 3) return vec3(1.0, 0.10, 0.06) * 5.0 * blink();        // aviation beacon
   if (mat == 6) return vec3(1.0, 0.76, 0.50) * (n.y > 0.3 ? 0.10 : 2.5);   // lamp head: emits sideways/down, dark from above
   vec3 alb = (mat == 2) ? vec3(0.010, 0.012, 0.015) : vec3(0.040, 0.055, 0.075);   // wet asphalt is black; facades deep teal-blue
   if (mat == 5) alb *= 0.8;
   float rough = 1.0, glassy = 0.0, facadeRelief = 1.0;
+  if (mat == 2 && n.y > 0.5 && p.y < 0.06){
+    // Asphalt, close up: aggregate, and the patches where it has been dug up and relaid. Faded out by
+    // projected size rather than distance, so it never becomes noise on the horizon.
+    float near = 1.0 - smoothstep(9.0, 34.0, t);
+    alb *= 1.0 + (0.55*vnoise(p.xz*7.3) - 0.25) * near;
+    alb *= 1.0 - 0.22 * near * smoothstep(0.62, 0.78, vnoise(p.xz*0.31 + 5.5));
+    alb = mix(alb, vec3(0.44, 0.44, 0.41), roadPaint(p) * (0.4 + 0.6*near));
+  }
   vec3 wEmit = vec3(0.0), neon = vec3(0.0); float leak = 0.0;
   if (mat == 7){ alb = vec3(0.055, 0.058, 0.062); rough = 0.45; glassy = 0.25; }   // galvanised metal: pipes, tanks, bridges
   if (mat == 9){                                                                  // vending machine: a lit box on the pavement
@@ -1955,6 +1990,7 @@ vec3 render(vec3 ro, vec3 rd, vec2 uv){
     if (mat == 2){                        // wet ground: one bounce, no AO / volumetrics
       float rmw = mod(floor(p.z / CELL), 7.0);
       bool water = (rmw == 3.0 || rmw == 4.0);
+      float pnt = water ? 0.0 : roadPaint(p);      // paint is rough: where it is, the road stops mirroring
       float wet = 0.65*vnoise(p.xz*0.35) + 0.35*vnoise(p.xz*0.9 + 3.1);
       float puddle = water ? 1.0 : smoothstep(0.52, 0.62, wet);            // puddles: mirror
       float dry = water ? 0.0 : smoothstep(0.42, 0.30, wet);               // dry patches: rough, no reflection
@@ -1992,7 +2028,7 @@ vec3 render(vec3 ro, vec3 rd, vec2 uv){
       }
       float c = max(dot(-rd, n), 0.0);
       float fres = 0.04 + 0.96*pow(1.0 - c, 5.0);
-      col = mix(col, refl, fres * mix(0.35, 0.95, puddle) * (1.0 - dry));
+      col = mix(col, refl, fres * mix(0.35, 0.95, puddle) * (1.0 - dry) * (1.0 - 0.85*pnt));
     }
   }
   col += volumetric(ro, rd, h.x > 0.0 ? h.x : MAXD, gl_FragCoord.xy);
