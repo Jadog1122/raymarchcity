@@ -1578,7 +1578,7 @@ vec3 shadeReflected(vec3 p, vec3 n, vec3 rd, float t, int mat){
   vec3 L = MOON_DIR;
   float dif = mix(pow(0.5 + 0.5*dot(n, L), 2.0), max(dot(n, L), 0.0), 0.7);
   vec3 col = alb * (vec3(0.45, 0.62, 0.90)*0.25*dif + vec3(0.02, 0.035, 0.06)*(0.55 + 0.45*n.y));
-  col += alb * lampLight(p, n) + alb * neonLight(p, n, 0.0) * 9.0 + emit;
+  col += alb * lampLight(p, n) + alb * neonLight(p, n, 0.0) * 14.0 + emit;
   float dens = 0.009 * uParams.y * (0.55 + 0.9*vnoise((p.xz + vec2(iTime*0.6, iTime*0.25)) * 0.025)) * exp(-0.06*max(p.y, 0.0));
   return mix(col, skyBase(rd) * vec3(0.75, 0.95, 1.2), 1.0 - exp(-dens*t));
 }
@@ -1731,7 +1731,7 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float t, int mat, bool cheap){
   if (mat == 2) col += carLights(p) * 0.03;
   // The gain belongs here, on surfaces, and not inside neonLight: the volumetric in-scatter calls the
   // same function, and putting it there lit every raindrop in the quarter along with the walls.
-  col += alb * neonLight(p, n, cheap ? 0.0 : 1.0) * 9.0;                        // what the signs opposite put on this wall
+  col += alb * neonLight(p, n, cheap ? 0.0 : 1.0) * 14.0;                        // what the signs opposite put on this wall
   if (mat != 2) col += vec3(1.0, 0.70, 0.42) * 0.015 * ringBoost(p, 0.0);
   if (mat == 11){                                                              // a figure without an edge is a hole in the picture
     float rim = pow(1.0 - abs(dot(n, rd)), 3.0);
