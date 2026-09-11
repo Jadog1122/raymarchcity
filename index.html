@@ -1909,7 +1909,8 @@ vec3 render(vec3 ro, vec3 rd, vec2 uv){
       vec3 rr = reflect(rd, n);
       vec3 rp = p + n*0.02;
       float t2 = 0.0, hit = -1.0;
-      if (uPath > 0.5){ hit = traceDDA(rp, rr, 160.0); if (hit > 0.0) map(rp + rr*hit); }
+      vec3 rn2 = vec3(0.0, 1.0, 0.0);
+      if (uPath > 0.5){ hit = traceDDA(rp, rr, 160.0); rn2 = gHitN; if (hit > 0.0) map(rp + rr*hit); }
       else for (int i = 0; i < 10; i++){
         float d = map(rp + rr*t2);
         if (d < 0.002*t2 + 0.001){ hit = t2; break; }
@@ -1920,7 +1921,7 @@ vec3 render(vec3 ro, vec3 rd, vec2 uv){
       if (hit > 0.0){
         int m2 = gMat;
         vec3 q = rp + rr*hit;
-        refl = shade(q, calcNormal(q), rr, hit + t, m2, true);
+        refl = shade(q, uPath > 0.5 ? rn2 : calcNormal(q), rr, hit + t, m2, true);
       }
       float c = max(dot(-rd, n), 0.0);
       float fres = 0.04 + 0.96*pow(1.0 - c, 5.0);
