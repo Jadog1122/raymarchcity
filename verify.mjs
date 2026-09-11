@@ -223,6 +223,28 @@ let smokeFail = '';
       if (!a1 || a1 === b1) smokeFail = 'lyric did not follow the audio position';
     }
   }
+  // The transport controls, asserted directly rather than through a screenshot: dragging the progress
+  // bar has to seek and must not also toggle playback, and the volume keys have to move the volume.
+  if (!smokeFail && served) {
+    const bar = await p2.$('#nowPlaying .bar');
+    const box = bar && await bar.boundingBox();
+    if (!box) smokeFail = 'no progress bar to scrub';
+    else {
+      await p2.mouse.click(box.x + box.width * 0.6, box.y + box.height / 2);
+      await p2.waitForTimeout(500);
+      const st = await p2.evaluate(() => ({ t: player.currentTime, d: player.duration || 0, paused: player.paused, vol: player.volume }));
+      const want = st.d * 0.6;
+      if (!(st.d > 1)) smokeFail = 'no duration on the loaded track';
+      else if (Math.abs(st.t - want) > st.d * 0.06) smokeFail = `scrub landed at ${st.t.toFixed(1)}s, wanted ~${want.toFixed(1)}s`;
+      else if (st.paused) smokeFail = 'scrubbing paused playback';
+      else {
+        await p2.keyboard.press('ArrowDown'); await p2.keyboard.press('ArrowDown'); await p2.waitForTimeout(300);
+        const v2 = await p2.evaluate(() => player.volume);
+        if (!(v2 < st.vol - 0.05)) smokeFail = 'volume keys did nothing';
+        else console.log(`smoke transport: scrub ${st.t.toFixed(1)}s/${st.d.toFixed(1)}s, volume ${st.vol.toFixed(2)} -> ${v2.toFixed(2)}`);
+      }
+    }
+  }
   await c2.close();
 }
 if (smokeFail) fails.push(smokeFail);
