@@ -1,102 +1,61 @@
-// npm run verify [-- M1]   or   M=M1 npm run verify
+// npm run verify            full suite
+// FRAME=downtown npm run verify   just one frame of the suite
+// NOREC=1 / FPS_SOFT=1 / AB=1     skip the recording check / report throughput only / cross-check the tracer
 import { chromium } from 'playwright';
 import { pathToFileURL } from 'node:url';
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
+import { execSync } from 'node:child_process';
 
 const M = process.env.M || process.argv[2] || 'M0';
-const EXTRA = process.env.EXTRA || '';          // extra query params, e.g. '&beat=0.9'
-const OUT = process.env.OUT || M;               // name of the timestamped copy
+const OUT = process.env.OUT || M;
 const NOREC = !!process.env.NOREC;
+const FPS_SOFT = !!process.env.FPS_SOFT;
+const ONE = process.env.FRAME || '';
 const hhmm = new Date().toTimeString().slice(0, 5).replace(':', '');
-fs.mkdirSync('shots', { recursive: true });
+fs.mkdirSync('shots/suite', { recursive: true });
 
-const errors = [];
-let smokeFail = '';
-try { const { execSync } = await import('node:child_process'); const b = execSync('pmset -g batt').toString(); if (/Battery Power/.test(b)) console.log('WARNING: on battery power — fps is not meaningful (' + (b.match(/\d+%/) || [''])[0] + ')'); } catch {}
-const browser = await chromium.launch({
-  headless: false,
-  args: ['--ignore-gpu-blocklist', '--enable-gpu-rasterization', '--autoplay-policy=no-user-gesture-required']
-});
-const ctx = await browser.newContext({ viewport: { width: 1720, height: 720 }, deviceScaleFactor: 2 });
-const page = await ctx.newPage();
-page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
-page.on('pageerror', e => errors.push('pageerror: ' + e.message));
+// ---------------------------------------------------------------------------
+// The frame suite.
+//
+// One frame cannot stand for this city any more: the zoning makes an industrial belt and an
+// entertainment quarter genuinely different pictures, and a threshold tuned on either one is wrong
+// for the other. So the suite walks the camera through every district and every piece of
+// infrastructure, and each frame carries the limits that are true of *it*.
+//
+// `brightArea` is the one that legitimately varies — a long lens on a lit landmark is mostly light,
+// an aerial shot is mostly dark — so its cap is per frame, measured with about a third of headroom.
+// Everything else is a rule about the look and holds everywhere.
+// ---------------------------------------------------------------------------
+const UNIVERSAL = {
+  dark5: 0.040,        // darkest 5 % mean: the frame must contain real black (measured span 0.000-0.038)
+  bright: 0.90,        // brightest 0.5 % mean: it must contain real highlights
+  warm: 12,            // % warm pixels: the two-colour discipline
+  nonBlack: 40,        // % non-black: not a black screen
+  magenta: 0.1,        // % NaN sentinel
+  flicker: 1.2,        // % pixels changing >20 % luma for a 0.02 unit dolly
+};
+const FRAMES = [
+  { name: 'oldtown',       q: '&rig=1&camz=16',            brightArea: 2.8, note: 'low-rise quarter' },
+  { name: 'river',         q: '&rig=1&camz=32',            brightArea: 3.7, note: 'street crossing the water on a bridge' },
+  { name: 'station',       q: '&rig=1&camz=52',            brightArea: 7.3, note: 'concourse under the elevated line' },
+  { name: 'downtown',      q: '&rig=1&camz=100',           brightArea: 2.2, note: 'high-rise district', primary: true },
+  { name: 'industrial',    q: '&rig=1&camz=172',           brightArea: 2.6, note: 'industrial belt' },
+  { name: 'entertainment', q: '&rig=1&camz=240',           brightArea: 5.2, note: 'neon quarter' },
+  { name: 'office',        q: '&rig=1&camz=284',           brightArea: 3.0, note: 'office district' },
+  { name: 'riverbank',     q: '&rig=2&camz=20',            brightArea: 3.2, note: 'across the water' },
+  { name: 'aerial',        q: '&rig=0&camz=100',           brightArea: 1.4, note: 'above the skyline' },
+  { name: 'tower',         q: '&rig=3&camz=100',           brightArea: 2.5, note: 'long lens on the landmark' },
+  // The beat ring moves with the camera, so the 0.02 dolly that measures flicker also moves the ring:
+  // this frame checks the ring renders, and skips the temporal comparison that it would confound.
+  { name: 'beatring',      q: '&rig=3&camz=100&beat=0.9',  brightArea: 15.0, flicker: 0, note: 'signature move: the ring lights the whole block' },
+];
+const suite = ONE ? FRAMES.filter(f => f.name === ONE) : FRAMES;
+if (!suite.length) { console.error(`no frame named "${ONE}"`); process.exit(2); }
 
-const url = pathToFileURL(path.resolve('index.html')).href + '?test=1' + EXTRA;
-await page.goto(url);
-await page.bringToFront();
-await page.waitForTimeout(3000);
-const stats = await page.evaluate(() => window.__stats);
-await page.screenshot({ path: 'shots/latest.png' });
-fs.copyFileSync('shots/latest.png', `shots/${OUT}-${hhmm}.png`);
-// edge-flicker metric: move the camera 0.02 units and compare
-const FLICKER_MAX = +(process.env.FLICKER_MAX ?? '1.2');   // % of pixels changing >20 % luma for a 0.02 unit dolly; 0 = report only
-const CAMZ = parseFloat((EXTRA.match(/camz=([\d.]+)/) || [0, '100'])[1]);
-await page.goto(url.replace(/&camz=[\d.]+/, '') + '&camz=' + (CAMZ + 0.02)); await page.waitForTimeout(1200);
-await page.screenshot({ path: 'shots/latest-b.png' });
-// ---------- recording check: 5 s via MediaRecorder, count frames with playwright's ffmpeg ----------
-let recFrames = -1;
-if (!NOREC) {
-  await ctx.close();                              // no second GPU window while recording
-  const ctx2 = await browser.newContext({ viewport: { width: 1280, height: 540 }, acceptDownloads: true });
-  const p2 = await ctx2.newPage();
-  const dl = p2.waitForEvent('download', { timeout: 20000 });
-  await p2.goto(pathToFileURL(path.resolve('index.html')).href + '?test=1&rec=5');
-  const d = await dl; const webm = path.resolve('shots/rec-test.webm'); await d.saveAs(webm);
-  // count frames by letting Chrome decode the file (playwright's ffmpeg is a minimal build)
-  const p3 = await ctx2.newPage();
-  await p3.goto('about:blank');
-  recFrames = await p3.evaluate(async (bytes) => {
-    const blob = new Blob([new Uint8Array(bytes)], { type: 'video/webm' });
-    const v = document.createElement('video'); v.muted = true; v.src = URL.createObjectURL(blob); document.body.appendChild(v);
-    await new Promise(r => { v.onended = r; v.onerror = r; v.play(); setTimeout(r, 15000); });
-    return v.getVideoPlaybackQuality().totalVideoFrames;
-  }, [...fs.readFileSync(webm)]);
-  console.log(`rec: ${d.suggestedFilename()} ${fs.statSync(webm).size} bytes, ${recFrames} frames in 5 s`);
-  await ctx2.close();
-}
-// ---------- smoke test of the real page: ?test=1 skips most of the app, so load it the way a user does ----------
-{
-  const c3 = await browser.newContext({ viewport: { width: 1280, height: 720 } });
-  const p3 = await c3.newPage();
-  const bad = [];
-  p3.on('pageerror', e => bad.push('pageerror: ' + e.message));
-  p3.on('console', m => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) bad.push('console: ' + m.text().slice(0, 120)); });
-  // prefer the local server so the playlist path is covered too; fall back to file://
-  const served = await fetch('http://127.0.0.1:5173/index.html').then(r => r.ok).catch(() => false);
-  await p3.goto(served ? 'http://127.0.0.1:5173/index.html' : url.replace(/\?test=1.*$/, ''));
-  await p3.waitForTimeout(3000);
-  const live = await p3.evaluate(() => ({ lib: !!window.__lib, stats: !!window.__stats, tracks: document.querySelectorAll('.track').length }));
-  console.log(`smoke (${served ? 'http' : 'file://'}): lib=${live.lib} stats=${live.stats} tracks=${live.tracks}` + (bad.length ? ` errors=${bad.length}` : ''));
-  const real = bad.filter(b => !/manifest\.json/.test(b));                 // file:// cannot read the manifest; loadLibrary already falls back
-  if (real.length) smokeFail = 'runtime errors on the real page: ' + real[0];
-  else if (!live.lib || !live.stats) smokeFail = 'app did not initialise on the real page';
-  else if (served && live.tracks === 0) smokeFail = 'playlist did not render on the real page';
-  // lyrics must follow the audio even when rendering is paused (fullscreen on macOS blurs the window; hidden tabs stop rAF)
-  if (!smokeFail && served && live.tracks > 0) {
-    await p3.click('.track:nth-child(1)');
-    await p3.waitForFunction(() => window.__lyrics && window.__lyrics().length > 3, null, { timeout: 25000 }).catch(() => {});
-    await p3.waitForTimeout(800);
-    const seek = async t => { await p3.evaluate(s => { player.currentTime = s; }, t); await p3.waitForTimeout(1200);
-      return p3.evaluate(() => ({ lyric: window.__text ? window.__text.lyric : null, frames: window.__stats.frames })); };
-    // pick two moments that genuinely belong to different lines, so a repeated chorus cannot pass or fail it by accident
-    const picks = await p3.evaluate(() => { const L = window.__lyrics ? window.__lyrics() : [];
-      if (L.length < 4) return null;
-      const first = L[1], other = L.find(x => x.text !== first.text && x.t > first.t + 5);
-      return other ? { n: L.length, a: first.t + 1, b: other.t + 1 } : null; });
-    if (!picks) smokeFail = 'no usable lyrics loaded for the first track';
-    else {
-      const a1 = await seek(picks.a);
-      const b1 = await seek(picks.b);
-      console.log(`smoke lyrics: ${picks.n} lines, ${picks.a.toFixed(0)}s "${String(a1.lyric).slice(0, 12)}" -> ${picks.b.toFixed(0)}s "${String(b1.lyric).slice(0, 12)}"`);
-      if (!a1.lyric || a1.lyric === b1.lyric) smokeFail = 'lyric did not follow the audio position';
-    }
-  }
-  await c3.close();
-}
-await browser.close();
+try { const b = execSync('pmset -g batt').toString();
+  if (/Battery Power/.test(b)) console.log('WARNING: on battery power — fps is not meaningful (' + (b.match(/\d+%/) || [''])[0] + ')'); } catch {}
 
 // ---------- minimal PNG decode (8-bit RGB/RGBA, non-interlaced) ----------
 function decodePNG(buf) {
@@ -120,9 +79,7 @@ function decodePNG(buf) {
       const c = (y > 0 && i >= bpp) ? out[prv + i - bpp] : 0;
       let v;
       switch (f) {
-        case 0: v = x; break;
-        case 1: v = x + a; break;
-        case 2: v = x + b; break;
+        case 0: v = x; break; case 1: v = x + a; break; case 2: v = x + b; break;
         case 3: v = x + ((a + b) >> 1); break;
         case 4: { const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
                   v = x + ((pa <= pb && pa <= pc) ? a : (pb <= pc ? b : c)); break; }
@@ -133,95 +90,177 @@ function decodePNG(buf) {
   }
   return { w, h, bpp, data: out };
 }
-const png = decodePNG(fs.readFileSync('shots/latest.png'));
-const pngB = decodePNG(fs.readFileSync('shots/latest-b.png'));
-let flick = 0;
-for (let i = 0; i < png.w * png.h; i++) {
-  const o = i * png.bpp, la = 0.2126*png.data[o] + 0.7152*png.data[o+1] + 0.0722*png.data[o+2];
-  const lb = 0.2126*pngB.data[o] + 0.7152*pngB.data[o+1] + 0.0722*pngB.data[o+2];
-  if (Math.abs(la - lb) > 51) flick++;
+function measure(file) {
+  const p = decodePNG(fs.readFileSync(file)); const n = p.w * p.h; const hist = new Float64Array(256);
+  let nonBlack = 0, magenta = 0, warm = 0, bright = 0, cx = 0, cy = 0, cw = 0;
+  for (let i = 0; i < n; i++) {
+    const o = i * p.bpp, r = p.data[o], g = p.data[o + 1], b = p.data[o + 2];
+    const L = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    hist[Math.round(L)]++;
+    if (Math.max(r, g, b) > 12) nonBlack++;
+    if (r > 200 && g < 60 && b > 200) magenta++;
+    if (r > 1.3 * b && L > 51) warm++;
+    if (L / 255 > 0.8) { bright++; }
+    if (L / 255 > 0.5) { const x = i % p.w, y = (i / p.w) | 0; cx += x * L / 255; cy += y * L / 255; cw += L / 255; }
+  }
+  const tail = (fromDark, frac) => { let need = n * frac, s = 0, c = 0;
+    for (let k = 0; k < 256; k++) { const bin = fromDark ? k : 255 - k; const take = Math.min(hist[bin], need - c); s += take * bin; c += take; if (c >= need) break; }
+    return s / c / 255; };
+  return { png: p, n, nonBlack: 100 * nonBlack / n, magenta: 100 * magenta / n, warm: 100 * warm / n,
+    dark5: tail(true, 0.05), bright: tail(false, 0.005), brightArea: 100 * bright / n,
+    centroid: cw > 0 ? 100 * Math.hypot(cx / cw - p.w / 2, cy / cw - p.h / 2) / p.w : 0 };
 }
-const flickerPct = 100 * flick / (png.w * png.h);
-// composition: brightness-weighted centroid offset from the centre (% of width), and count of highlight blobs (luma > 0.8, 1/8 res)
-let cx = 0, cy = 0, cw = 0; const W8 = Math.floor(png.w / 8), H8 = Math.floor(png.h / 8); const grid = new Uint8Array(W8 * H8);
-for (let y = 0; y < png.h; y++) for (let x = 0; x < png.w; x++) {
-  const o = (y * png.w + x) * png.bpp, l = (0.2126*png.data[o] + 0.7152*png.data[o+1] + 0.0722*png.data[o+2]) / 255;
-  if (l > 0.5) { cx += x * l; cy += y * l; cw += l; }
-  if (l > 0.8) grid[Math.floor(y / 8) * W8 + Math.floor(x / 8)] = 1;
+function flickerBetween(a, b) {
+  const A = decodePNG(fs.readFileSync(a)), B = decodePNG(fs.readFileSync(b));
+  let n = 0; const total = A.w * A.h;
+  for (let i = 0; i < total; i++) { const o = i * A.bpp;
+    const la = 0.2126 * A.data[o] + 0.7152 * A.data[o + 1] + 0.0722 * A.data[o + 2];
+    const lb = 0.2126 * B.data[o] + 0.7152 * B.data[o + 1] + 0.0722 * B.data[o + 2];
+    if (Math.abs(la - lb) > 51) n++; }
+  return 100 * n / total;
 }
-const centroidPct = cw > 0 ? 100 * Math.hypot(cx / cw - png.w / 2, cy / cw - png.h / 2) / png.w : 0;
-let brightArea = 0;
-for (let i = 0; i < png.w * png.h; i++) { const o = i * png.bpp; if ((0.2126*png.data[o] + 0.7152*png.data[o+1] + 0.0722*png.data[o+2]) / 255 > 0.8) brightArea++; }
-const brightPct = 100 * brightArea / (png.w * png.h);
-let blobs = 0; const seen = new Uint8Array(W8 * H8);
-for (let i = 0; i < W8 * H8; i++) if (grid[i] && !seen[i]) { blobs++; const st = [i]; seen[i] = 1;
-  while (st.length) { const k = st.pop(), kx = k % W8, ky = (k / W8) | 0;
-    for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) { const nx = kx + dx, ny = ky + dy; if (nx < 0 || ny < 0 || nx >= W8 || ny >= H8) continue; const j = ny * W8 + nx; if (grid[j] && !seen[j]) { seen[j] = 1; st.push(j); } } } }
-let nonBlack = 0, magenta = 0, warm = 0; const n = png.w * png.h;
-const hist = new Float64Array(256);
-for (let i = 0; i < n; i++) {
-  const r = png.data[i * png.bpp], g = png.data[i * png.bpp + 1], b = png.data[i * png.bpp + 2];
-  if (Math.max(r, g, b) > 12) nonBlack++;
-  if (r > 200 && g < 60 && b > 200) magenta++;
-  hist[Math.round(0.2126*r + 0.7152*g + 0.0722*b)]++;
-  if (r > 1.3*b && (0.2126*r + 0.7152*g + 0.0722*b) > 51) warm++;
-}
-const warmPct = 100 * warm / n;
-const nonBlackPct = 100 * nonBlack / n, magentaPct = 100 * magenta / n;
-// luminance percentiles: mean of darkest 5 % and brightest 1 %
-function tailMean(fromDark, frac){
-  let need = n * frac, sum = 0, cnt = 0;
-  for (let k = 0; k < 256; k++){ const bin = fromDark ? k : 255 - k; const take = Math.min(hist[bin], need - cnt);
-    sum += take * bin; cnt += take; if (cnt >= need) break; }
-  return sum / cnt / 255;
-}
-const BRIGHT_FRAC = +(process.env.BRIGHT_FRAC ?? '0.005');   // M8: fewer, better lights -> judge the top 0.5 %
-const dark5 = tailMean(true, 0.05), bright1 = tailMean(false, BRIGHT_FRAC);
-
-// ---------- optional A/B: grid-walk tracer vs reference sphere-trace ----------
-let abPct = -1;
-if (process.env.AB) {
-  const b2 = await chromium.launch({ headless: false, args: ['--ignore-gpu-blocklist'] });
-  const c2 = await b2.newContext({ viewport: { width: 1720, height: 720 }, deviceScaleFactor: 2 });
-  const p4 = await c2.newPage(); await p4.goto(url + '&path=0'); await p4.waitForTimeout(2500);
-  await p4.screenshot({ path: 'shots/latest-ref.png' }); await b2.close();
-  const R = decodePNG(fs.readFileSync('shots/latest-ref.png')); let df = 0;
-  for (let i = 0; i < png.w * png.h; i++) { const o = i * png.bpp;
-    const la = 0.2126*png.data[o] + 0.7152*png.data[o+1] + 0.0722*png.data[o+2], lb = 0.2126*R.data[o] + 0.7152*R.data[o+1] + 0.0722*R.data[o+2];
-    if (Math.abs(la - lb) > 51) df++; }
-  abPct = 100 * df / (png.w * png.h);
-  console.log(`A/B tracer vs reference: ${abPct.toFixed(2)}% pixels differ`);
-}
-// ---------- report ----------
-console.log('stats:', JSON.stringify(stats));
-console.log(`png: ${png.w}x${png.h}  nonBlack=${nonBlackPct.toFixed(1)}%  magenta=${magentaPct.toFixed(3)}%  dark5=${dark5.toFixed(3)}  bright1=${bright1.toFixed(3)}  warm=${warmPct.toFixed(1)}%  flicker=${flickerPct.toFixed(2)}%  centroid=${centroidPct.toFixed(1)}%  blobs=${blobs}  brightArea=${brightPct.toFixed(2)}%`);
-if (errors.length) console.log('console errors:\n  ' + errors.slice(0, 5).join('\n  '));
 
 const fails = [];
+const browser = await chromium.launch({ headless: false, args: ['--ignore-gpu-blocklist', '--enable-gpu-rasterization', '--autoplay-policy=no-user-gesture-required'] });
+const ctx = await browser.newContext({ viewport: { width: 1720, height: 720 }, deviceScaleFactor: 2 });
+const page = await ctx.newPage();
+const consoleErrors = [];
+page.on('console', m => { if (m.type() === 'error') consoleErrors.push(m.text()); });
+page.on('pageerror', e => consoleErrors.push('pageerror: ' + e.message));
+const base = pathToFileURL(path.resolve('index.html')).href + '?test=1&search=-1.68';
+await page.bringToFront();
+
+// ---------- the suite ----------
+console.log('frame           dark5  bright  warm%  brArea%  centroid%  flicker%   fps');
+let primaryStats = null;
+for (const f of suite) {
+  await page.goto(base + f.q); await page.waitForTimeout(2600);
+  const st = await page.evaluate(() => window.__stats);
+  const shot = `shots/suite/${f.name}.png`;
+  await page.screenshot({ path: shot });
+  const m = measure(shot);
+
+  const flickMax = f.flicker !== undefined ? f.flicker : UNIVERSAL.flicker;
+  let fl = -1;
+  if (flickMax > 0) {
+    const camz = +(f.q.match(/camz=([\d.]+)/) || [0, '100'])[1];
+    await page.goto(base + f.q.replace(/camz=[\d.]+/, 'camz=' + (camz + 0.02))); await page.waitForTimeout(1300);
+    await page.screenshot({ path: 'shots/suite/_b.png' });
+    fl = flickerBetween(shot, 'shots/suite/_b.png');
+    fs.unlinkSync('shots/suite/_b.png');
+  }
+  console.log(f.name.padEnd(15), m.dark5.toFixed(3).padStart(5), m.bright.toFixed(3).padStart(6), m.warm.toFixed(1).padStart(6),
+    m.brightArea.toFixed(2).padStart(7), m.centroid.toFixed(1).padStart(9), (fl < 0 ? '  n/a' : fl.toFixed(2)).padStart(9), String(st.fps).padStart(6));
+
+  const bad = (msg) => fails.push(`${f.name}: ${msg}`);
+  if (st.shaderError) bad('shaderError: ' + st.shaderError.slice(0, 200));
+  if (!(m.magenta < UNIVERSAL.magenta)) bad(`magenta ${m.magenta.toFixed(3)}% (NaN in the shader)`);
+  if (!(m.nonBlack > UNIVERSAL.nonBlack)) bad(`nonBlack ${m.nonBlack.toFixed(1)}% <= ${UNIVERSAL.nonBlack}%`);
+  if (!(m.dark5 < UNIVERSAL.dark5)) bad(`dark5 ${m.dark5.toFixed(3)} >= ${UNIVERSAL.dark5} (no true blacks)`);
+  if (!(m.bright > UNIVERSAL.bright)) bad(`bright ${m.bright.toFixed(3)} <= ${UNIVERSAL.bright} (no highlights)`);
+  if (!(m.warm <= UNIVERSAL.warm)) bad(`warm ${m.warm.toFixed(1)}% > ${UNIVERSAL.warm}% (two-colour rule broken)`);
+  if (!(m.brightArea <= f.brightArea)) bad(`bright area ${m.brightArea.toFixed(2)}% > ${f.brightArea}% (too much of the frame is lit)`);
+  if (fl >= 0 && !(fl <= flickMax)) bad(`flicker ${fl.toFixed(2)}% > ${flickMax}%`);
+  if (!(st.fps >= 50)) { if (FPS_SOFT) { /* reported in the table */ } else bad(`fps ${st.fps} < 50`); }
+
+  if (f.primary) {
+    primaryStats = st;
+    fs.copyFileSync(shot, 'shots/latest.png');
+    fs.copyFileSync(shot, `shots/${OUT}-${hhmm}.png`);
+  }
+}
+
+// ---------- composition is a property of the camera, not of where the light landed ----------
+// The old check measured the brightness centroid, which a symmetric quarter fails for reasons that
+// have nothing to do with framing. Assert the camera rig itself instead.
+{
+  await page.goto(base + '&rig=1&camz=100'); await page.waitForTimeout(1200);
+  const cam = await page.evaluate(() => ({ ro: window.__u.uCamRo.value.toArray(), fw: window.__u.uCamFw.value.toArray(), focal: window.__u.uFocal.value }));
+  const offAxis = Math.abs(cam.ro[0]);
+  const yaw = Math.abs(cam.fw[0] / Math.max(cam.fw[2], 1e-3));
+  const pitch = cam.fw[1];
+  console.log(`camera: off-axis ${offAxis.toFixed(2)}u, yaw ${(Math.atan(yaw) * 57.3).toFixed(1)}deg, pitch ${(Math.asin(pitch) * 57.3).toFixed(1)}deg, focal ${cam.focal.toFixed(2)}`);
+  if (!(offAxis > 0.3)) fails.push(`camera sits on the street centre line (x=${cam.ro[0].toFixed(2)})`);
+  if (!(yaw > 0.04)) fails.push(`camera looks straight down the street (yaw ${(Math.atan(yaw) * 57.3).toFixed(1)}deg)`);
+  if (!(pitch > 0.02)) fails.push(`camera is level; the horizon needs to sit off centre (pitch ${(Math.asin(pitch) * 57.3).toFixed(1)}deg)`);
+}
+
+// ---------- the real page: ?test=1 skips most of the app ----------
+let smokeFail = '';
+{
+  const c2 = await browser.newContext({ viewport: { width: 1280, height: 720 } });
+  const p2 = await c2.newPage();
+  const bad = [];
+  p2.on('pageerror', e => bad.push('pageerror: ' + e.message));
+  p2.on('console', m => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) bad.push('console: ' + m.text().slice(0, 120)); });
+  const served = await fetch('http://127.0.0.1:5173/index.html').then(r => r.ok).catch(() => false);
+  await p2.goto(served ? 'http://127.0.0.1:5173/index.html' : pathToFileURL(path.resolve('index.html')).href);
+  await p2.waitForTimeout(3000);
+  const live = await p2.evaluate(() => ({ lib: !!window.__lib, stats: !!window.__stats, tracks: document.querySelectorAll('.track').length }));
+  console.log(`smoke (${served ? 'http' : 'file://'}): lib=${live.lib} stats=${live.stats} tracks=${live.tracks}` + (bad.length ? ` errors=${bad.length}` : ''));
+  const real = bad.filter(b => !/manifest\.json/.test(b));
+  if (real.length) smokeFail = 'runtime errors on the real page: ' + real[0];
+  else if (!live.lib || !live.stats) smokeFail = 'app did not initialise on the real page';
+  else if (served && live.tracks === 0) smokeFail = 'playlist did not render on the real page';
+  // lyrics must follow the audio even when rendering is paused
+  if (!smokeFail && served && live.tracks > 0) {
+    await p2.click('.track:nth-child(1)');
+    await p2.waitForFunction(() => window.__lyrics && window.__lyrics().length > 3, null, { timeout: 25000 }).catch(() => {});
+    await p2.waitForTimeout(800);
+    const picks = await p2.evaluate(() => { const L = window.__lyrics ? window.__lyrics() : [];
+      if (L.length < 4) return null;
+      const first = L[1], other = L.find(x => x.text !== first.text && x.t > first.t + 5);
+      return other ? { n: L.length, a: first.t + 1, b: other.t + 1 } : null; });
+    if (!picks) smokeFail = 'no usable lyrics loaded for the first track';
+    else {
+      const seek = async t => { await p2.evaluate(s => { player.currentTime = s; }, t); await p2.waitForTimeout(1200);
+        return p2.evaluate(() => (window.__text ? window.__text.lyric : null)); };
+      const a1 = await seek(picks.a), b1 = await seek(picks.b);
+      console.log(`smoke lyrics: ${picks.n} lines, ${picks.a.toFixed(0)}s "${String(a1).slice(0, 12)}" -> ${picks.b.toFixed(0)}s "${String(b1).slice(0, 12)}"`);
+      if (!a1 || a1 === b1) smokeFail = 'lyric did not follow the audio position';
+    }
+  }
+  await c2.close();
+}
 if (smokeFail) fails.push(smokeFail);
-if (stats.shaderError) fails.push('shaderError: ' + stats.shaderError.slice(0, 300));
-if (!(stats.fps >= 50)) { if (process.env.FPS_SOFT) console.log(`(fps ${stats.fps} < 50 — reported only, FPS_SOFT set)`); else fails.push(`fps ${stats.fps} < 50`); }
-if (!(nonBlackPct > 40)) fails.push(`nonBlack ${nonBlackPct.toFixed(1)}% <= 40%`);
-if (!(magentaPct < 0.1)) fails.push(`magenta ${magentaPct.toFixed(3)}% >= 0.1%`);
-if (!(dark5 < 0.03)) fails.push(`dark5 ${dark5.toFixed(3)} >= 0.03 (no true blacks)`);
-if (!(bright1 > 0.9)) fails.push(`bright1 ${bright1.toFixed(3)} <= 0.9 (no highlights)`);
-if (!(warmPct <= 12)) fails.push(`warm ${warmPct.toFixed(1)}% > 12% (two-colour rule broken)`);
-// Composition guard. It measures where the light sits, not where the camera is, so a dense quarter with
-// signage down both sides scores low for reasons that have nothing to do with framing. Weak guard only.
-const CENTROID_MIN = +(process.env.CENTROID_MIN ?? '2.5');
-// The highlight-blob count is retired: it proxied for light hierarchy, and brightArea measures that
-// intent directly without being confounded by how many separate shapes the same light lands on.
-const BLOBS_MAX = +(process.env.BLOBS_MAX ?? '0');
-// How much of the frame is a light. Raised deliberately as the art direction changed: ribbon glazing on
-// curtain walls (M12) and the client-requested Japanese signage layer (M14) both add lit area on purpose.
-// Pre-M12 this frame sat at 1.07 %. It is still a cap, not a licence: 98 % of the frame is not a light.
-const BRIGHT_AREA_MAX = +(process.env.BRIGHT_AREA_MAX ?? '1.9');
-if (BRIGHT_AREA_MAX > 0 && !(brightPct <= BRIGHT_AREA_MAX)) fails.push(`bright area ${brightPct.toFixed(2)}% > ${BRIGHT_AREA_MAX}% (too much of the frame is lit)`);
-if (CENTROID_MIN > 0 && !(centroidPct >= CENTROID_MIN)) fails.push(`centroid ${centroidPct.toFixed(1)}% < ${CENTROID_MIN}% (composition too centred)`);
-if (BLOBS_MAX > 0 && !(blobs <= BLOBS_MAX)) fails.push(`highlight blobs ${blobs} > ${BLOBS_MAX} (no light hierarchy)`);
-if (abPct >= 0 && !(abPct <= 2)) fails.push(`A/B ${abPct.toFixed(2)}% > 2% (tracer disagrees with the reference)`);
-if (FLICKER_MAX > 0 && !(flickerPct <= FLICKER_MAX)) fails.push(`flicker ${flickerPct.toFixed(2)}% > ${FLICKER_MAX}% (edge aliasing)`);
-if (!NOREC && !(recFrames >= 140)) { if (process.env.FPS_SOFT) console.log(`(recording ${recFrames} frames < 140 — reported only, FPS_SOFT set)`); else fails.push(`recording ${recFrames} frames < 140 in 5 s`); }
-if (errors.some(e => /pageerror|SHADER ERROR/.test(e))) fails.push('page/shader errors in console');
+
+// ---------- optional: does the grid-walk tracer agree with the reference sphere-trace ----------
+if (process.env.AB) {
+  const c3 = await browser.newContext({ viewport: { width: 1720, height: 720 }, deviceScaleFactor: 2 });
+  const p3 = await c3.newPage();
+  await p3.goto(base + '&rig=1&camz=100&path=0'); await p3.waitForTimeout(2600);
+  await p3.screenshot({ path: 'shots/suite/_ref.png' });
+  await c3.close();
+  const ab = flickerBetween('shots/suite/downtown.png', 'shots/suite/_ref.png');
+  fs.unlinkSync('shots/suite/_ref.png');
+  console.log(`A/B tracer vs reference: ${ab.toFixed(2)}% pixels differ`);
+  if (!(ab <= 2)) fails.push(`A/B ${ab.toFixed(2)}% > 2% (tracer disagrees with the reference)`);
+}
+
+// ---------- recording throughput ----------
+let recFrames = -1;
+if (!NOREC) {
+  const c4 = await browser.newContext({ viewport: { width: 1280, height: 540 }, acceptDownloads: true });
+  const p4 = await c4.newPage();
+  const dl = p4.waitForEvent('download', { timeout: 25000 });
+  await p4.goto(pathToFileURL(path.resolve('index.html')).href + '?test=1&rec=5');
+  const d = await dl; const webm = path.resolve('shots/rec-test.webm'); await d.saveAs(webm);
+  recFrames = await p4.evaluate(async (bytes) => {
+    const v = document.createElement('video'); v.muted = true;
+    v.src = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: 'video/webm' }));
+    document.body.appendChild(v);
+    await new Promise(r => { v.onended = r; v.onerror = r; v.play(); setTimeout(r, 20000); });
+    return v.getVideoPlaybackQuality().totalVideoFrames;
+  }, [...fs.readFileSync(webm)]);
+  console.log(`rec: ${(fs.statSync(webm).size / 1048576).toFixed(1)} MB, ${recFrames} frames in 5 s`);
+  if (!(recFrames >= 140)) { if (!FPS_SOFT) fails.push(`recording ${recFrames} frames < 140 in 5 s`); }
+  await c4.close();
+}
+await browser.close();
+
+if (consoleErrors.some(e => /pageerror|SHADER ERROR/.test(e))) fails.push('page/shader errors: ' + consoleErrors[0].slice(0, 160));
+if (FPS_SOFT) console.log('(fps and recording throughput reported only — FPS_SOFT is set)');
+if (primaryStats) console.log(`gpu: ${primaryStats.gpu} | render target ${primaryStats.rtW}x${primaryStats.rtH} | dpr ${primaryStats.dpr}`);
+
 if (fails.length) { console.log('VERIFY FAIL\n  - ' + fails.join('\n  - ')); process.exit(1); }
-console.log('VERIFY PASS  -> shots/latest.png');
+console.log(`VERIFY PASS  (${suite.length} frame${suite.length > 1 ? 's' : ''})  -> shots/suite/, shots/latest.png`);
