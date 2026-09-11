@@ -212,6 +212,12 @@ bool plazaAt(vec2 id){ return !viaductRow(id.y) && mod(id.x, 5.0) == 0.0 && (via
 #define VIA_HT  0.55
 
 // vertical capped cylinder: SDF and analytic intersection, so curved towers and pipes agree between the two paths
+// A cylinder lying along x — a car's axle, and the only thing in the city that is not upright.
+float sdCylX(vec3 p, vec2 c, float r, float x0, float x1){
+  float d = length(p.yz - c) - r;
+  float dx = abs(p.x - 0.5*(x0 + x1)) - 0.5*(x1 - x0);
+  return min(max(d, dx), 0.0) + length(max(vec2(d, dx), 0.0));
+}
 float sdCylY(vec3 p, vec2 c, float r, float y0, float y1){
   float d = length(p.xz - c) - r;
   float dy = abs(p.y - 0.5*(y0 + y1)) - 0.5*(y1 - y0);
@@ -226,6 +232,30 @@ float hitSphere(vec3 ro, vec3 rd, vec3 c, float r, float tCur, float tLim){
   if (!(t > tCur && t < tLim)) return 1e9;
   if (t < gHitT){ gHitT = t; gHitMat = gPendMat; gHitN = normalize(ro + rd*t - c); }
   return t;
+}
+float hitCylX(vec3 ro, vec3 rd, vec2 c, float r, float x0, float x1, float tCur, float tLim){
+  float best = 1e9; int kind = -1;                              // 0 tread, 1 outer face, 2 inner face
+  vec2 o = ro.yz - c, d = rd.yz;
+  float A = dot(d, d), B = dot(o, d), C = dot(o, o) - r*r;
+  float disc = B*B - A*C;
+  if (disc > 0.0 && A > 1e-9){
+    float sq = sqrt(disc);
+    float t0 = (-B - sq) / A, t1 = (-B + sq) / A;
+    float a0 = ro.x + rd.x*t0;
+    if (t0 > tCur && t0 < tLim && a0 > x0 && a0 < x1 && t0 < best){ best = t0; kind = 0; }
+    float a1 = ro.x + rd.x*t1;
+    if (t1 > tCur && t1 < tLim && a1 > x0 && a1 < x1 && t1 < best){ best = t1; kind = 0; }
+  }
+  for (int k = 0; k < 2; k++){
+    float t = ((k == 0 ? x0 : x1) - ro.x) / rd.x;
+    if (t > tCur && t < tLim && t < best){ vec2 pp = ro.yz + rd.yz*t - c; if (dot(pp, pp) < r*r){ best = t; kind = k + 1; } }
+  }
+  if (kind >= 0 && best < gHitT){
+    gHitT = best; gHitMat = gPendMat;
+    if (kind == 0){ vec2 pp = ro.yz + rd.yz*best - c; gHitN = normalize(vec3(0.0, pp.x, pp.y)); }
+    else gHitN = vec3(kind == 1 ? -1.0 : 1.0, 0.0, 0.0);
+  }
+  return best;
 }
 float hitCylY(vec3 ro, vec3 rd, vec2 c, float r, float y0, float y1, float tCur, float tLim){
   float best = 1e9;
@@ -495,6 +525,12 @@ float streetPropsSDF(vec2 id, vec3 p, inout int mat){
       float b = sdBox(p - c, e);
       b = min(b, sdBox(p - c - vec3(0.0, e.y*0.85, -0.15*dr), vec3(e.x*0.78, e.y*0.55, e.z*0.48)));   // cabin
       if (b < d){ d = b; mat = 10; }
+      float wr = min(0.29, e.y*0.86);                                                                 // wheels, scaling with the car
+      for (int a = 0; a < 2; a++){
+        float wz = c.z + (a == 0 ? -1.0 : 1.0) * e.z*0.62;
+        float w = sdCylX(p, vec2(wr, wz), wr, c.x - e.x*1.04, c.x + e.x*1.04);
+        if (w < d){ d = w; mat = 16; }
+      }
     } }
   return d;
 }
@@ -1005,6 +1041,13 @@ float traceDDA(vec3 ro, vec3 rd, float tmax){
             best = min(best, hitBox(ro, rd, c - e, c + e, max(tCur - 4.0, 0.0), tLim + 4.0));
             vec3 cc = c + vec3(0.0, e.y*0.85, -0.15*dr), ce = vec3(e.x*0.78, e.y*0.55, e.z*0.48);
             best = min(best, hitBox(ro, rd, cc - ce, cc + ce, max(tCur - 4.0, 0.0), tLim + 4.0));
+            { gPendMat = 16;
+              float wr = min(0.29, e.y*0.86);
+              for (int a = 0; a < 2; a++){
+                float wz = c.z + (a == 0 ? -1.0 : 1.0) * e.z*0.62;
+                best = min(best, hitCylX(ro, rd, vec2(wr, wz), wr, c.x - e.x*1.04, c.x + e.x*1.04, max(tCur - 4.0, 0.0), tLim + 4.0));
+              }
+              gPendMat = 10; }
           } }
       }
       gPendMat = 1;
@@ -1731,19 +1774,74 @@ float roadPaint(vec3 p){
   }
   return paint * (0.45 + 0.55*vnoise(p.xz * 1.7));            // worn, and worn unevenly
 }
+// The two bands each lane's tyres have polished into the asphalt. On a wet road these are the most
+// legible thing on it — not because they are brighter but because they are where the water is not,
+// so they stop mirroring while everything around them still does.
+float roadTrack(vec3 p){
+  float k = floor(p.x / CELL + 0.5);
+  float hw = streetHalf(k);
+  float dx = abs(p.x - k*CELL);
+  if (dx > hw) return 0.0;
+  float lane = hw*0.45;                                       // where carOf puts the traffic
+  return smoothstep(0.26, 0.09, min(abs(dx - (lane - 0.58)), abs(dx - (lane + 0.58))));
+}
+// Ironwork: a manhole in the lane every few blocks, and a gutter grate against the kerb. Both are
+// cast iron — darker than the asphalt and, being smooth, much better mirrors when it rains.
+// x: how much iron, y: 1 on a grate's slots, z: the raised rim of a manhole
+vec3 roadIron(vec3 p){
+  float k = floor(p.x / CELL + 0.5);
+  float hw = streetHalf(k);
+  float dx = p.x - k*CELL;
+  if (abs(dx) > hw) return vec3(0.0);
+  float cz = floor(p.z / CELL);
+  vec3 o = vec3(0.0);
+  if (hash21(vec2(k, cz) + 57.0) < 0.42){                     // manhole
+    vec2 c = vec2((hash21(vec2(k, cz) + 71.0) - 0.5) * hw * 0.8, (cz + 0.5)*CELL);
+    float r = length(vec2(dx - c.x, p.z - c.y));
+    o.x = 1.0 - smoothstep(0.30, 0.34, r);
+    o.z = smoothstep(0.34, 0.30, r) * smoothstep(0.24, 0.29, r);
+  }
+  float gz = abs(p.z - (cz + 0.5)*CELL);
+  if (gz < 0.55 && hash21(vec2(k, cz) + 91.0) < 0.55){        // gutter grate, hard against the kerb
+    float g = (1.0 - smoothstep(0.16, 0.20, abs(abs(dx) - (hw - 0.20)))) * (1.0 - smoothstep(0.45, 0.55, gz));
+    o.x = max(o.x, g);
+    o.y = g * step(fract(p.z * 7.0), 0.45);
+  }
+  return o;
+}
+// Japanese tactile paving: the yellow strip of bars that runs along every pavement, set back a little
+// from the kerb. It is the one genuinely bright thing at ground level in a street like this.
+float tactile(vec3 p, float cx, float halfx){
+  float d = abs(abs(p.x - cx) - (halfx - 0.30));
+  return (1.0 - smoothstep(0.13, 0.17, d)) * step(fract(p.z * 3.1), 0.62);
+}
 vec3 shade(vec3 p, vec3 n, vec3 rd, float t, int mat, bool cheap){
   if (mat == 3) return vec3(1.0, 0.10, 0.06) * 5.0 * blink();        // aviation beacon
   if (mat == 6) return vec3(1.0, 0.76, 0.50) * (n.y > 0.3 ? 0.10 : 2.5);   // lamp head: emits sideways/down, dark from above
   vec3 alb = (mat == 2) ? vec3(0.010, 0.012, 0.015) : vec3(0.040, 0.055, 0.075);   // wet asphalt is black; facades deep teal-blue
   if (mat == 5) alb *= 0.8;
   float rough = 1.0, glassy = 0.0, facadeRelief = 1.0;
-  if (mat == 2 && n.y > 0.5 && p.y < 0.06){
-    // Asphalt, close up: aggregate, and the patches where it has been dug up and relaid. Faded out by
-    // projected size rather than distance, so it never becomes noise on the horizon.
+  if (mat == 2 && n.y > 0.5){
     float near = 1.0 - smoothstep(9.0, 34.0, t);
-    alb *= 1.0 + (0.55*vnoise(p.xz*7.3) - 0.25) * near;
-    alb *= 1.0 - 0.22 * near * smoothstep(0.62, 0.78, vnoise(p.xz*0.31 + 5.5));
-    alb = mix(alb, vec3(0.44, 0.44, 0.41), roadPaint(p) * (0.4 + 0.6*near));
+    if (p.y < 0.06){
+      // Asphalt, close up: aggregate, and the patches where it has been dug up and relaid. Faded out
+      // by projected size rather than distance, so it never becomes noise on the horizon.
+      alb *= 1.0 + (0.55*vnoise(p.xz*7.3) - 0.25) * near;
+      alb *= 1.0 - 0.22 * near * smoothstep(0.62, 0.78, vnoise(p.xz*0.31 + 5.5));
+      alb = mix(alb, vec3(0.44, 0.44, 0.41), roadPaint(p) * (0.4 + 0.6*near));
+      alb *= 1.0 + 0.35 * roadTrack(p) * near;                          // polished by the tyres
+      vec3 ir = roadIron(p);
+      alb = mix(alb, vec3(0.020, 0.021, 0.023), ir.x * near);           // cast iron
+      alb = mix(alb, vec3(0.004, 0.004, 0.005), ir.y * near);           // down the slots
+      alb += vec3(0.05, 0.05, 0.048) * ir.z * near;                     // the rim catches a highlight
+      if (ir.x > 0.01){ rough = mix(rough, 0.25, ir.x * (1.0 - ir.y)); glassy = max(glassy, 0.35*ir.x); }
+    } else {
+      vec2 sid = floor(p.xz / CELL);
+      float scx, shx; lotSpanX(sid, scx, shx);
+      float tac = tactile(p, scx, shx) * near;
+      alb *= 0.85 + 0.4*vnoise(p.xz*5.1);                               // paving slabs are not one colour
+      alb = mix(alb, vec3(0.26, 0.21, 0.045), tac);                     // the yellow strip
+    }
   }
   vec3 wEmit = vec3(0.0), neon = vec3(0.0); float leak = 0.0;
   if (mat == 7){ alb = vec3(0.055, 0.058, 0.062); rough = 0.45; glassy = 0.25; }   // galvanised metal: pipes, tanks, bridges
@@ -1757,6 +1855,7 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float t, int mat, bool cheap){
     return mix(outc, skyBase(rd) * vec3(0.75, 0.95, 1.2), 1.0 - exp(-fd*t));
   }
   if (mat == 11){ alb = vec3(0.034, 0.032, 0.036); rough = 0.85; glassy = 0.0; }   // a person: almost a silhouette at night
+  if (mat == 16){ alb = vec3(0.009, 0.009, 0.010); rough = 0.96; glassy = 0.0; }   // tyre: the blackest thing on the street
   if (mat == 10){
     // A car was one dark glossy box with lamps painted on its front and back faces — and on a street
     // you almost always see a car from the side, where there was nothing at all: no colour, no glass,
@@ -2011,6 +2110,14 @@ vec3 render(vec3 ro, vec3 rd, vec2 uv){
       float wet = 0.65*vnoise(p.xz*0.35) + 0.35*vnoise(p.xz*0.9 + 3.1);
       float puddle = water ? 1.0 : smoothstep(0.52, 0.62, wet);            // puddles: mirror
       float dry = water ? 0.0 : smoothstep(0.42, 0.30, wet);               // dry patches: rough, no reflection
+      if (!water){
+        float trk = roadTrack(p);                                          // the tyres push the water aside
+        puddle *= 1.0 - 0.70*trk;
+        dry = max(dry, 0.55*trk);
+        float iron = roadIron(p).x;                                        // and cast iron is a better mirror than tarmac
+        puddle = max(puddle, 0.85*iron);
+        dry *= 1.0 - iron;
+      }
       col *= 1.0 + 0.6*dry;                                                // dry asphalt is a little lighter
       vec3 nr = n;                        // rain ripples
       if (water){                         // river: long waves along the view direction -> lights stretch into vertical streaks
@@ -2018,10 +2125,14 @@ vec3 render(vec3 ro, vec3 rd, vec2 uv){
         nr.x += 0.015*sin(p.z*4.0 + p.x*2.0 + iTime*1.5);
         col *= 0.4;
       }
-      nr.xz += (0.003 + 0.016*puddle*uMood.x) * vec2(sin(p.x*6.1 + iTime*2.3) + sin(p.z*4.7 - iTime*1.9), sin(p.z*5.3 + iTime*2.1) + sin(p.x*3.9 - iTime*1.6));
+      // Anisotropic, and that is the whole trick: a wet road smears lights into long vertical streaks
+      // because the ripples run across it, so the reflected ray is thrown along the view direction far
+      // more than across it. Perturbing x and z equally gives a blurry mirror, not a wet street.
+      nr.xz += (0.003 + 0.016*puddle*uMood.x) * vec2(0.30, 1.85)
+             * vec2(sin(p.x*6.1 + iTime*2.3) + sin(p.z*4.7 - iTime*1.9), sin(p.z*5.3 + iTime*2.1) + sin(p.x*3.9 - iTime*1.6));
       { float rough = (1.0 - 0.85*puddle) * (1.0 - dry);                  // damp asphalt: rough reflection, converged by TAA
         float taaOn = step(1e-4, length(uJitter));
-        vec2 jr = (hash22(gl_FragCoord.xy + fract(iTime)*17.0) - 0.5) * 0.10 * rough * taaOn; nr.xz += jr; }
+        vec2 jr = (hash22(gl_FragCoord.xy + fract(iTime)*17.0) - 0.5) * 0.10 * rough * taaOn * vec2(0.45, 1.6); nr.xz += jr; }
       n = normalize(nr);
       vec3 rr = reflect(rd, n);
       vec3 rp = p + n*0.02;
