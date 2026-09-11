@@ -3,9 +3,10 @@ shots/
 .DS_Store
 tools/lyrics
 tools/Lyrics.app/Contents/MacOS/lyrics
-# the audio itself stays out of the repo; the manifest that lists it does not
-music/*
-!music/manifest.json
+tools/Lyrics.app/Contents/_CodeSignature/
+# the audio stays out of the repo, and so does the manifest that names it —
+# the published page must fall back to "drag an mp3 in", not list tracks it cannot fetch
+music/
 
 # the self-contained build carries the audio; never commit it
 nightcity.html
