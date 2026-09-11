@@ -42,7 +42,10 @@ const FRAMES = [
   { name: 'station',       q: '&rig=1&camz=52',            brightArea: 7.3, note: 'concourse under the elevated line' },
   { name: 'downtown',      q: '&rig=1&camz=100',           brightArea: 2.2, note: 'high-rise district', primary: true },
   { name: 'industrial',    q: '&rig=1&camz=172',           brightArea: 2.6, note: 'industrial belt' },
-  { name: 'entertainment', q: '&rig=1&camz=240',           brightArea: 5.2, note: 'neon quarter' },
+  { name: 'entertainment', q: '&rig=1&camz=240',           brightArea: 5.2, note: 'neon quarter, from the elevated road' },
+  // Down among the tubes, which is the one place the signs are close enough to light the walls. The
+  // elevated frame above looks across the district from outside it and never sees that happen.
+  { name: 'neonstreet',    q: '&rig=1&camz=212',           brightArea:  2.9, note: 'street level in the neon quarter' },
   { name: 'office',        q: '&rig=1&camz=284',           brightArea: 3.0, note: 'office district' },
   { name: 'riverbank',     q: '&rig=2&camz=20',            brightArea: 3.2, note: 'across the water' },
   { name: 'aerial',        q: '&rig=0&camz=100',           brightArea: 1.4, note: 'above the skyline' },
