@@ -1225,7 +1225,9 @@ float segIrr(vec3 p, vec3 n, vec3 A, vec3 B, vec3 en){
     // The emitter has a facing too. A tube lies flat on its facade and throws light out into the
     // street, not sideways along the wall it is bolted to — without this term one tube washes the
     // whole block it is on, which is a filter over the picture rather than a light in it.
-    float el = max(dot(-l, en), 0.0);
+    // A tube stands proud of its wall, so it is not a flat panel: straight down onto the pavement it
+    // still throws light, it only stops behind the wall it is bolted to. A wrap of a quarter.
+    float el = clamp((dot(-l, en) + 0.25) / 1.25, 0.0, 1.0);
     s += w * nl * el / (1.0 + 0.80*d2);
   }
   return s;
