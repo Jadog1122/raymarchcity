@@ -124,6 +124,13 @@ vec2  hash22(vec2 p){ float h = hash21(p); return vec2(h, hash21(p + h + 7.1)); 
 float ign(vec2 p){ return fract(52.9829189 * fract(0.06711056*p.x + 0.00583715*p.y)); }
 float vnoise(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0 - 2.0*f);
   return mix(mix(hash21(i), hash21(i + vec2(1, 0)), f.x), mix(hash21(i + vec2(0, 1)), hash21(i + vec2(1, 1)), f.x), f.y); }
+// The same noise with a quintic fade, for the cloud deck only. f*f*(3-2f) is C1: its second
+// derivative jumps at every cell boundary, and once the field is thresholded into cloud those jumps
+// show up as long straight creases along the noise grid — which is what the sky was made of. It is a
+// separate function on purpose: vnoise also draws the district map, and changing it there would
+// rezone the city to fix the weather.
+float cnoise(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*f*(f*(f*6.0 - 15.0) + 10.0);
+  return mix(mix(hash21(i), hash21(i + vec2(1, 0)), f.x), mix(hash21(i + vec2(0, 1)), hash21(i + vec2(1, 1)), f.x), f.y); }
 
 // ---------- scene ----------
 #define CELL   8.0     // block pitch (street to street)
@@ -1084,7 +1091,14 @@ float cloudLayer(vec3 rd, float h, vec2 drift, float sc, float lo, float hi, out
   cpos = vec3(cp.x, h, cp.y);
   if (dist <= 0.0) return 0.0;                  // camera already above this deck: looking up, it is not there
   cp += drift * iTime;
-  float nz = 0.5*vnoise(cp*sc) + 0.28*vnoise(cp*sc*2.3 + 7.3) + 0.14*vnoise(cp*sc*5.3 + 3.1);
+  // Four octaves, each rotated so no two grids line up, and the whole field warped by a fifth of a
+  // cell before it is sampled. Three axis-aligned octaves stacked on the same lattice leave the
+  // lattice visible; rotation and a warp are what turn it into weather.
+  const mat2 R = mat2(0.8018, 0.5976, -0.5976, 0.8018);
+  vec2 w = cp*sc;
+  float nz = 0.5*cnoise(w);
+  w = R*w*2.17 + 7.3;  nz += 0.28*cnoise(w);
+  w = R*w*2.11 + 3.1;  nz += 0.14*cnoise(w);
   return smoothstep(lo, hi, nz);
 }
 // The moon sits exactly where the key light comes from, so the sky and the lighting agree with each
