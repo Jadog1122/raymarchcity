@@ -1483,6 +1483,7 @@ vec3 windowLight(vec3 p, vec3 n, vec3 rd, float t, out float leak, out float fac
   // reasoning as the tube halo — this is the sign and not light transport, so it belongs to the sign,
   // and it is what makes a street of blades read as lit rather than as decals on a black wall.
   if (abs(n.x) > 0.5 && ht >= 6.0 && t < 95.0){
+    float bFade = 1.0 - smoothstep(34.0, 92.0, t);      // a blade is sub-pixel long before 95 m; fade, do not cut
     float fs = n.x > 0.0 ? 1.0 : -1.0;
     float dnsB = districtOf(id) == 1 ? 0.85 : 0.18;
     vec2 ctrB = (id + 0.5)*CELL + lotOffset(id, hs);
@@ -1492,13 +1493,13 @@ vec3 windowLight(vec3 p, vec3 n, vec3 rd, float t, out float leak, out float fac
       if (by + 1.20 > ht) continue;
       if ((hash21(id + 151.0 + float(k)*3.0) < 0.5 ? -1.0 : 1.0) != fs) continue;
       float bz = (hash21(id + 163.0 + float(k)*5.0) - 0.5) * max(hs.y - 0.4, 0.0) * 1.4;
-      float gl = smoothstep(0.92, 0.16, abs(p.z - ctrB.y - bz)) * smoothstep(2.2, 0.45, abs(p.y - by));
+      float gl = smoothstep(0.60, 0.14, abs(p.z - ctrB.y - bz)) * smoothstep(2.0, 0.42, abs(p.y - by));
       if (gl <= 0.0) continue;
       float aiB = floor(hash21(id + 177.0 + float(k)*7.0) * 47.999);
       vec2 clB = vec2(mod(aiB, uSignGrid.x), floor(aiB / uSignGrid.x));
       vec3 bcB = max(mix(vec3(0.5), textureLod(tSigns, (clB + 0.5) / uSignGrid, 5.0).rgb, 1.6), vec3(0.0));
-      emit += bcB * 0.34 * gl;
-      leak += 0.30 * gl;
+      emit += bcB * 0.26 * gl * bFade;
+      leak += 0.30 * gl * bFade;
     }
   }
   // neon (cyberpunk districts): one vertical or horizontal strip per building, magenta or cyan, in a few districts only
