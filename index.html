@@ -254,14 +254,16 @@ int archOf(vec2 id){
 // floor. The street runs along z, so the box sticks out along x and its two printed faces look up and
 // down the street — which is how you actually read them while walking.
 bool signOf(vec2 id, int k, out vec3 c, out vec3 e, out float atlasIdx){
-  c = vec3(0.0); e = vec3(0.36, 1.05, 0.05); atlasIdx = 0.0;
+  // 0.60 x 2.40 m. The atlas cell is 1:4 and the panel was 1:2.9, which stretched every character
+  // 38% wide; a real 袖看板 is about 1:4 anyway, so the geometry was the thing that was wrong.
+  c = vec3(0.0); e = vec3(0.30, 1.20, 0.05); atlasIdx = 0.0;
   if (riverRow(id.y)) return false;
   vec2 hs; float ht; cellParams(id, hs, ht);
   if (ht < 6.0) return false;
   float dens = (districtOf(id) == 1) ? 0.85 : 0.18;   // the neon bands are papered with them; ordinary streets stay sparse
   if (hash21(id + 140.0 + float(k)*11.0) >= dens) return false;
   float y = 2.9 + 2.5*float(k);
-  if (y + 1.2 > ht) return false;
+  if (y + e.y > ht) return false;
   vec2 ctr = (id + 0.5)*CELL + lotOffset(id, hs);
   float side = hash21(id + 151.0 + float(k)*3.0) < 0.5 ? -1.0 : 1.0;
   float zoff = (hash21(id + 163.0 + float(k)*5.0) - 0.5) * max(hs.y - 0.4, 0.0) * 1.4;
