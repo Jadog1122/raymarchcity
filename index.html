@@ -27,6 +27,8 @@
   #nowPlaying .bar{flex:1;height:2px;background:rgba(207,211,216,.2);position:relative}
   #nowPlaying .bar i{position:absolute;left:0;top:0;bottom:0;background:#ffb36b;width:0}
   .hidden{display:none!important}
+  #panel,#bars{transition:opacity .55s ease}
+  body.hud-away #panel,body.hud-away #bars{opacity:0;pointer-events:none}
   #bars{position:fixed;right:14px;bottom:14px;display:flex;gap:5px;align-items:flex-end;height:60px;z-index:5;pointer-events:none}
   #bars i{display:block;width:8px;height:2px;background:#cfd3d8;opacity:.8;border-radius:1px}
   #bars i:last-child{background:#ffb870}
@@ -371,6 +373,18 @@ float signSample(vec3 p, out vec2 uvOut){
   return -1.0;
 }
 
+// How much of a street prop survives as the lens closes on it. The first version of every prop was
+// culled on raw distance to the camera — 7 m for a kiosk, 14 m for a car — which blinks a full-size
+// object out of the middle of the frame, once per prop, all the way down the street. Two changes:
+// the test is about the camera's *axis*, so anything walking past off to the side is never touched at
+// all; and what is left shrinks to nothing over a few metres instead of switching off.
+float lensFade(vec3 c, float near){
+  vec2 fwd = normalize(uCamFw.xz);
+  vec2 v = c.xz - uCamRo.xz;
+  if (dot(v, fwd) < 0.6) return 0.0;                             // level with or behind the lens: already out of frame
+  return smoothstep(near, near*1.9, length(v));                  // and what is still ahead shrinks, it does not blink
+}
+
 // A vending machine against the building line. Nothing sets the scale of a Japanese street faster:
 // everyone knows how tall one is, so the building behind it stops being an abstract box.
 bool vendOf(vec2 id, int k, out vec3 c, out vec3 e){
@@ -382,7 +396,10 @@ bool vendOf(vec2 id, int k, out vec3 c, out vec3 e){
   float side = hash21(id + 221.0 + float(k)) < 0.5 ? -1.0 : 1.0;
   float zoff = (hash21(id + 233.0 + float(k)*3.0) - 0.5) * max(hs.y - 0.6, 0.0) * 1.6 + float(k)*0.95;
   c = vec3(ctr.x + side*(hs.x + 0.34), 0.12 + e.y, ctr.y + zoff);
-  return distance(c.xz, uCamRo.xz) > 7.0;                      // never right against the lens
+  float f = lensFade(c, 4.2);
+  if (f < 0.03) return false;
+  e *= f; c.y = 0.12 + e.y;                                    // sits on the pavement while it shrinks
+  return true;
 }
 // A car in one of the two lanes of the street on this cell's -x edge. Same timing as carLights(),
 // so the body and the pool of light it throws on the road belong to each other.
@@ -399,15 +416,17 @@ bool carOf(vec2 id, int lane, out vec3 c, out vec3 e, out float dir){
   float n  = floor((zc - c0) / P + 0.5);
   float cpos = c0 + n*P;
   if (abs(cpos - zc) > CELL*0.5) return false;                // that car sits in another block; it is that block's to draw
-  if (id.x == 0.0 && abs(cpos - uCamZ) < 14.0) return false;   // keep the lane beside the lens clear; traffic still runs on down the street
   if (hash21(seed + n*0.31 + 12.0) > 0.72) return false;
   c = vec3(id.x*CELL + dir*streetHalf(id.x)*0.45, 0.12 + e.y, cpos);
+  float f = lensFade(c, 6.0);                                  // the lane beside the lens stays clear, but it fades out of it
+  if (f < 0.03) return false;
+  e *= f; c.y = 0.12 + e.y;
   return true;
 }
 // Someone on the pavement. A figure of known height is the cheapest way to tell the viewer whether
 // the building behind it is thirty storeys or three hundred.
-bool pedOf(vec2 id, int k, out vec3 base, out float bob){
-  base = vec3(0.0); bob = 0.0;
+bool pedOf(vec2 id, int k, out vec3 base, out float bob, out float sc){
+  base = vec3(0.0); bob = 0.0; sc = 1.0;
   if (riverRow(id.y)) return false;
   vec2 seed = id + 260.0 + float(k)*17.0;
   if (hash21(seed) >= (mod(floor(id.y / 6.0), 2.0) == 1.0 ? 0.75 : 0.40)) return false;
@@ -422,16 +441,17 @@ bool pedOf(vec2 id, int k, out vec3 base, out float bob){
   z = (id.y + 0.5)*CELL + mod(z - (id.y + 0.5)*CELL + CELL*0.5, CELL) - CELL*0.5;   // stays on its own block
   base = vec3(ctr.x + side*(hs.x + lane), 0.12, z);
   bob = 0.035 * sin(iTime * sp * 5.2 + hash21(seed + 6.0) * 6.28);
-  return distance(base.xz, uCamRo.xz) > 6.0;                   // same: a figure reads as scale at a distance, not in your face
+  sc = lensFade(base, 3.6);                                    // same: a figure reads as scale at a distance, not in your face
+  return sc > 0.03;
 }
 float streetPropsSDF(vec2 id, vec3 p, inout int mat){
   float d = 1e5;
   for (int k = 0; k < 2; k++){ vec3 c, e; if (vendOf(id, k, c, e)){ float v = sdBox(p - c, e); if (v < d){ d = v; mat = 9; } } }
-  for (int k = 0; k < 2; k++){ vec3 b0; float bob;
-    if (pedOf(id, k, b0, bob)){
-      float body = sdCylY(p, b0.xz, 0.115, b0.y + 0.05, b0.y + 0.78 + bob);                    // legs
-      body = min(body, sdCylY(p, b0.xz, 0.185, b0.y + 0.70 + bob, b0.y + 1.32 + bob));        // torso
-      body = min(body, sdSphere(p, b0 + vec3(0.0, 1.44 + bob, 0.0), 0.125));                  // head
+  for (int k = 0; k < 2; k++){ vec3 b0; float bob, sc;
+    if (pedOf(id, k, b0, bob, sc)){
+      float body = sdCylY(p, b0.xz, 0.115*sc, b0.y + 0.05, b0.y + (0.78 + bob)*sc);                  // legs
+      body = min(body, sdCylY(p, b0.xz, 0.185*sc, b0.y + (0.70 + bob)*sc, b0.y + (1.32 + bob)*sc)); // torso
+      body = min(body, sdSphere(p, b0 + vec3(0.0, (1.44 + bob)*sc, 0.0), 0.125*sc));               // head
       if (body < d){ d = body; mat = 11; }
     } }
   for (int k = 0; k < 2; k++){ vec3 c, e; float dr;
@@ -887,11 +907,11 @@ float traceDDA(vec3 ro, vec3 rd, float tmax){
       if (yLo < 2.7){                                              // street furniture and traffic, all inside the kerb band
         for (int k = 0; k < 2; k++){ vec3 c, e;
           if (vendOf(cell, k, c, e)) best = min(best, hitBox(ro, rd, c - e, c + e, tCur, tLim)); }
-        for (int k = 0; k < 2; k++){ vec3 b0; float bob;
-          if (pedOf(cell, k, b0, bob)){
-            best = min(best, hitCylY(ro, rd, b0.xz, 0.115, b0.y + 0.05, b0.y + 0.78 + bob, tCur, tLim));
-            best = min(best, hitCylY(ro, rd, b0.xz, 0.185, b0.y + 0.70 + bob, b0.y + 1.32 + bob, tCur, tLim));
-            best = min(best, hitSphere(ro, rd, b0 + vec3(0.0, 1.44 + bob, 0.0), 0.125, tCur, tLim));
+        for (int k = 0; k < 2; k++){ vec3 b0; float bob, sc;
+          if (pedOf(cell, k, b0, bob, sc)){
+            best = min(best, hitCylY(ro, rd, b0.xz, 0.115*sc, b0.y + 0.05, b0.y + (0.78 + bob)*sc, tCur, tLim));
+            best = min(best, hitCylY(ro, rd, b0.xz, 0.185*sc, b0.y + (0.70 + bob)*sc, b0.y + (1.32 + bob)*sc, tCur, tLim));
+            best = min(best, hitSphere(ro, rd, b0 + vec3(0.0, (1.44 + bob)*sc, 0.0), 0.125*sc, tCur, tLim));
           } }
         for (int k = 0; k < 2; k++){ vec3 c, e; float dr;
           if (carOf(cell, k, c, e, dr)){
@@ -1066,7 +1086,7 @@ vec3 starsAt(vec3 rd){
   float tw  = 0.82 + 0.18*sin(iTime*2.3 + h1*31.0);          // scintillation
   return mix(vec3(1.0, 0.88, 0.76), vec3(0.78, 0.86, 1.0), h2) * (exp(-d2*600.0) * mag * tw * 1.25);
 }
-float flash(){ return uFlashAge < 0.1 ? 1.0 : 0.0; }               // 0.1 s lightning: the whole skyline in silhouette
+float flash(){ float a = uFlashAge; return a > 0.30 ? 0.0 : exp(-a*10.0) * (0.7 + 0.3*cos(a*70.0)); }   // a strike flickers and dies
 vec3 skyColor(vec3 rd){
   // The far city burning into the haze. It belongs to the sky and not to skyBase, because skyBase is
   // also the fog colour: put it there and every distant surface in the city gets a warm lift with it.
@@ -1091,8 +1111,8 @@ vec3 skyColor(vec3 rd){
   vec3 cloudHi = vec3(0.016, 0.017, 0.021) * (0.8 + 0.9*(1.0 - rd.y));
   cloudHi += vec3(0.55, 0.60, 0.72) * pow(md, 40.0) * 0.09;
   float fl = flash();                                   // the lightning already lit the fog; it has to come from somewhere
-  cloudLo += vec3(0.78, 0.85, 1.0) * fl * (0.10 + 0.55*densLo);
-  cloudHi += vec3(0.78, 0.85, 1.0) * fl * (0.08 + 0.40*densHi);
+  cloudLo += vec3(0.78, 0.85, 1.0) * fl * (0.03 + 0.18*densLo);
+  cloudHi += vec3(0.78, 0.85, 1.0) * fl * (0.02 + 0.13*densHi);
 
   // Cloud first, both decks, in the order they sit. The moon and the stars are behind them, so they
   // are attenuated by what is in front rather than punched out of it: mixing cloud over a saturated
@@ -1297,8 +1317,11 @@ float ringBoost(vec3 p, float j){                                   // j: per-wi
   float best = 0.0;
   for (int k = 0; k < 2; k++){
     float f = (k == 0 ? uBeatAge.x : uBeatAge.y) - dist / 40.0 - 0.15*j;   // time since the ring passed this window
-    float b = f < 0.0 ? 0.0 : (f < 0.4 ? 1.0 : exp(-(f - 0.4)*(4.0 + 4.0*j)));
-    b *= smoothstep(-0.06, 0.02, f);                                  // soft leading edge
+    // The ring passes; it does not stay. The first version held full strength for 0.4 s and decayed
+    // slowly after that, so with beats half a second apart the city never came back down — a third of
+    // the street footage was clipped white, and no still frame in the suite could see it.
+    float b = f < 0.0 ? 0.0 : exp(-f * (7.0 + 6.0*j));
+    b *= smoothstep(-0.05, 0.03, f);                                  // soft leading edge
     best = max(best, b);
   }
   return best * uParams.x;
@@ -1342,7 +1365,7 @@ vec3 windowLight(vec3 p, vec3 n, vec3 rd, float t, out float leak, out float fac
     float elig = step(hash21(cc*2.3 + id + 9.0), prof * occ);
     b *= elig;
     float rw = ringBoost(p, hash21(cc*0.71 + id + 1.7));                  // per-window timing: the wave front gets texture
-    b = max(b, 1.2 * rw * step(hash21(cc*1.3 + id + 4.0), prof * 0.45));   // the passing ring lights some dark windows, then they fade
+    b = max(b, 1.2 * rw * step(hash21(cc*1.3 + id + 4.0), prof * 0.22));   // the passing ring lights some dark windows, then they fade
     b *= 1.0 + 1.5*rw;
     vec2 d = f - vec2(float(i), float(j)) - 0.5;                   // pixel -> neighbour window centre, cell units
     if (i == 0 && j == 0){
@@ -1624,7 +1647,10 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float t, int mat, bool cheap){
   float bank = 0.55 + 0.9*vnoise((p.xz + vec2(iTime*0.6, iTime*0.25)) * 0.025);   // drifting fog banks between the blocks
   float dens = 0.009 * uParams.y * bank * exp(-0.06*midY);
   float fog = 1.0 - exp(-dens*t);
-  vec3 fogCol = skyBase(rd) * vec3(0.75, 0.95, 1.2) * (1.0 + 5.0*flash());  // fog colder than the sky; lightning lifts it
+  // The fog used to go up x6 on a strike, which washed the whole distant city pale grey: it read as an
+  // overcast afternoon, not lightning. The sky behind the skyline is what should jump, so that the
+  // buildings go to silhouette instead of dissolving.
+  vec3 fogCol = skyBase(rd) * vec3(0.75, 0.95, 1.2) * (1.0 + 0.9*flash());
   { vec2 idf = floor(p.xz / CELL); if (neonDistrict(idf)) fogCol += neonPalette(floor(idf / 3.0)) * 0.012; }   // neon districts tint their own haze
   col = mix(col, vec3(dot(col, vec3(0.3, 0.5, 0.2))), 0.5*fog);              // distance desaturation
   return mix(col, fogCol, fog);
@@ -1661,7 +1687,7 @@ vec3 volumetric(vec3 ro, vec3 rd, float tmax, vec2 frag){
 vec3 render(vec3 ro, vec3 rd, vec2 uv){
   vec2 h = raymarch(ro, rd);
   gDepth = h.x > 0.0 ? h.x : MAXD;
-  vec3 col = skyColor(rd) * (1.0 + 5.0*flash());
+  vec3 col = skyColor(rd) * (1.0 + 1.8*flash());
   if (h.x > 0.0){
     float t = h.x;
     vec3 p = ro + rd*t;
@@ -2294,7 +2320,8 @@ function resize(){
 window.addEventListener('resize', () => { resize(); textState.drawnKey = ''; if (typeof updateText === 'function') updateText(); });
 document.addEventListener('fullscreenchange', () => { resize(); textState.drawnKey = ''; if (typeof updateText === 'function') updateText(); });
 resize();
-window.__setRenderScale = (s) => { renderScale = Math.min(1, Math.max(0.4, s)); resize(); };
+let scaleFloor = 0.6;
+window.__setRenderScale = (s) => { renderScale = Math.min(1, Math.max(scaleFloor, s)); resize(); };
 // synchronous GPU benchmark (test only): render n frames back to back, wait for the GPU, return ms per frame
 window.__bench = (n = 30) => {
   const gl = renderer.getContext();
@@ -2305,13 +2332,21 @@ window.__bench = (n = 30) => {
   return (performance.now() - t0) / n;
 };
 const statLine = document.getElementById('statLine');
-// adaptive: 2 s below 55 -> -0.1 (min 0.4); 5 s above 59 -> +0.05 (max 1.0). Off in test mode.
-let lowSec = 0, highSec = 0;
+// Adaptive: 2 s below 44 -> -0.1; 3 s above 54 -> +0.05 (max 1.0). Off in test mode.
+// The first version dropped below 55 and climbed above 59. On a machine that never reaches 59 that is
+// a one-way ratchet: it walked down to the 0.4 floor within a minute and stayed there, rendering the
+// whole piece at 688x288. Both ends of the band have to be reachable.
+// The floor is 0.6 because for a slow dolly a sharp 35 fps beats a soft 50 — but if 0.6 cannot even
+// hold 26 fps then the machine wins and the floor gives way, because a stuttering dolly is worse than
+// a soft one and no amount of sharpness rescues it.
+let lowSec = 0, highSec = 0, stuckSec = 0;
 function adaptScale(fps){
   if (TEST) return;
-  lowSec  = fps < 55 ? lowSec + 1 : 0;
-  highSec = fps > 59 ? highSec + 1 : 0;
-  if (lowSec >= 2 && renderScale > 0.4){ window.__setRenderScale(renderScale - 0.1); lowSec = 0; highSec = 0; }
+  lowSec  = fps < 44 ? lowSec + 1 : 0;
+  highSec = fps > 54 ? highSec + 1 : 0;
+  stuckSec = (renderScale <= scaleFloor + 1e-6 && fps < 26) ? stuckSec + 1 : 0;
+  if (stuckSec >= 4 && scaleFloor > 0.45){ scaleFloor = 0.45; stuckSec = 0; }
+  if (lowSec >= 2 && renderScale > scaleFloor){ window.__setRenderScale(renderScale - 0.1); lowSec = 0; highSec = 0; }
   else if (highSec >= 3 && renderScale < 1.0){ window.__setRenderScale(renderScale + 0.05); highSec = 0; }
 }
 
@@ -2691,11 +2726,19 @@ else {
     if (k === 'r'){ toggleRecord(); }
     if (k === 's'){ renderer.domElement.toBlob(b => { const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'nightcity-' + Date.now() + '.png'; a.click(); }); }
   });
-  // hide cursor after 3 s idle while fullscreen
+  // The panel is a tool, not part of the picture. While a track is playing it fades out after a few
+  // seconds of stillness, along with the cursor in fullscreen, and comes back the moment the mouse
+  // moves or a key is pressed. H still switches it off for good; pausing brings it back and keeps it.
   let cursorTimer = 0;
-  const wake = () => { document.body.classList.remove('nocursor'); clearTimeout(cursorTimer);
-    if (document.fullscreenElement) cursorTimer = setTimeout(() => document.body.classList.add('nocursor'), 3000); };
-  window.addEventListener('mousemove', wake); document.addEventListener('fullscreenchange', wake);
+  const idle = () => {
+    if (document.fullscreenElement) document.body.classList.add('nocursor');
+    if (barsVisible && !player.paused) document.body.classList.add('hud-away');
+  };
+  const wake = () => { document.body.classList.remove('nocursor', 'hud-away'); clearTimeout(cursorTimer);
+    cursorTimer = setTimeout(idle, 2500); };
+  window.addEventListener('mousemove', wake); window.addEventListener('keydown', wake);
+  document.addEventListener('fullscreenchange', wake);
+  player.addEventListener('play', wake); player.addEventListener('pause', wake);
   window.__toggleRecord = toggleRecord;
 }
 function drawBars(a){

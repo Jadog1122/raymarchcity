@@ -48,8 +48,11 @@ const FRAMES = [
   { name: 'aerial',        q: '&rig=0&camz=100',           brightArea: 1.4, note: 'above the skyline' },
   { name: 'tower',         q: '&rig=3&camz=100',           brightArea: 2.5, note: 'long lens on the landmark' },
   // The beat ring moves with the camera, so the 0.02 dolly that measures flicker also moves the ring:
-  // this frame checks the ring renders, and skips the temporal comparison that it would confound.
-  { name: 'beatring',      q: '&rig=3&camz=100&beat=0.9',  brightArea: 15.0, flicker: 0, note: 'signature move: the ring lights the whole block' },
+  // these frames check the ring renders, and skip the temporal comparison that it would confound.
+  { name: 'beatring',      q: '&rig=3&camz=100&beat=0.9',  brightArea:  3.0, flicker: 0, note: 'the ring has passed: the city has to come back down' },
+  // The suite had no street frame with a beat in it, and that is exactly where the ring did its damage:
+  // held at full strength it clipped a third of the street footage to white and nothing here could see it.
+  { name: 'beatstreet',    q: '&rig=1&camz=100&beat=0.6',  brightArea: 3.4, flicker: 0, note: 'the beat ring in the canyon, at its peak' },
 ];
 const suite = ONE ? FRAMES.filter(f => f.name === ONE) : FRAMES;
 if (!suite.length) { console.error(`no frame named "${ONE}"`); process.exit(2); }
