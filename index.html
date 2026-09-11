@@ -557,7 +557,11 @@ float lotSDF(vec2 id, vec3 p, out int mat){                    // the building(s
   if (riverRow(id.y)){ int rm = mat; float re = riverEdgeSDF(id, p, rm); if (re < br){ br = re; mat = rm; } return br; }
   vec2 hs; float ht; cellParams(id, hs, ht);
   if (stationAt(id)){                                           // concourse: a low lit hall under the tracks
-    float cc = sdBox(vec3(p.x - (id.x + 0.5)*CELL, p.y - CONC_H*0.5, p.z - (id.y + 0.5)*CELL), vec3(CELL*0.5 - 0.9, CONC_H*0.5, CELL*0.5 - 1.9));
+    // It has to respect the street like every other lot. With a fixed half width it was built 0.9 m
+    // from the cell edge whatever the street was doing, so on the narrow columns (half width 1.15) its
+    // wall landed on the camera's own line and one lit window filled a quarter of the frame.
+    float cxc, hxc; lotSpanX(id, cxc, hxc);
+    float cc = sdBox(vec3(p.x - cxc, p.y - CONC_H*0.5, p.z - (id.y + 0.5)*CELL), vec3(hxc, CONC_H*0.5, CELL*0.5 - 1.9));
     if (cc < br){ br = cc; mat = 1; }
     return br;
   }
@@ -792,8 +796,9 @@ float traceDDA(vec3 ro, vec3 rd, float tmax){
       // Rays travelling down a street pass most blocks without touching them; rejecting those with a
       // single box test instead of a dozen primitive tests is the difference between 120 ms and 15 ms.
       if (stationAt(cell)){                                       // concourse hall
-        float cxs = (cell.x + 0.5)*CELL, zcs = (cell.y + 0.5)*CELL;
-        best = min(best, hitBox(ro, rd, vec3(cxs - CELL*0.5 + 0.9, 0.0, zcs - CELL*0.5 + 1.9), vec3(cxs + CELL*0.5 - 0.9, CONC_H, zcs + CELL*0.5 - 1.9), tCur, tLim));
+        float cxs, hxs; lotSpanX(cell, cxs, hxs);
+        float zcs = (cell.y + 0.5)*CELL;
+        best = min(best, hitBox(ro, rd, vec3(cxs - hxs, 0.0, zcs - CELL*0.5 + 1.9), vec3(cxs + hxs, CONC_H, zcs + CELL*0.5 - 1.9), tCur, tLim));
       }
       if (!stationAt(cell) && !plazaAt(cell)){
       vec2 lotB = boxHit(ro, rd, vec3(bc.x - hs.x - 0.85, -0.05, bc.y - hs.y - 0.6), vec3(bc.x + hs.x + 0.85, ht + 8.0, bc.y + hs.y + 0.6));
@@ -1354,7 +1359,7 @@ vec3 windowLight(vec3 p, vec3 n, vec3 rd, float t, out float leak, out float fac
   float prof = smoothstep(0.0, 0.22, fy) * (1.0 - smoothstep(0.72, 1.0, fy));   // ground + top floors mostly dark
   float gRing = ringBoost(p, 0.0);
   float occ = (0.25 + 0.25*hash21(id + 77.7)) * (0.6 + 0.4*uMood.y);   // quiet music: the city dims
-  if (stationAt(id)) occ = 0.95;                                      // a concourse is lit all the way across                                       // per-building occupancy
+  if (stationAt(id) && cls != 1) occ = 0.88;                                      // a concourse is lit all the way across                                       // per-building occupancy
   // fade the window grid out by its projected size, not by raw distance: once a window is around a pixel
   // wide it can only alias, and a fixed distance threshold gets this wrong at other resolutions
   float px = t * 2.0 / max(iResolution.y * uFocal, 1.0);              // world units per pixel here
@@ -1366,7 +1371,7 @@ vec3 windowLight(vec3 p, vec3 n, vec3 rd, float t, out float leak, out float fac
     float cl = hash21(floor(cc / 3.0) + id*7.7 + face);          // 3x3 cluster value
     float hw = hash21(cc + id*13.17 + face);
     float floorV = hash21(vec2(cc.y, 0.0) + id*5.1);                // ribbon glazing: a whole floor tends to be lit together
-    float v  = cls == 1 ? mix(hw, floorV, 0.78) : mix(hw, cl, 0.55);   // clustered, not uniform
+    float v  = cls == 1 ? mix(hw, floorV, 0.66) : mix(hw, cl, 0.55);   // clustered, not uniform
     float offT = cls == 1 ? 0.58 : 0.30;                            // a ribbon covers far more area than a punched window, so fewer are lit
     float b  = v < offT ? 0.0 : (v < 0.70 ? 0.10 : (v < 0.86 ? 1.6 : 6.0));   // off / dim / bright / near-white
     if (cls == 1) b = min(b, 2.4) * 0.38;                           // a ribbon spans a whole floor: it needs far less intensity than a punched window to read
@@ -1377,8 +1382,13 @@ vec3 windowLight(vec3 p, vec3 n, vec3 rd, float t, out float leak, out float fac
     b *= 1.0 + 1.5*rw;
     vec2 d = f - vec2(float(i), float(j)) - 0.5;                   // pixel -> neighbour window centre, cell units
     if (i == 0 && j == 0){
-      vec2 rect = cls == 1 ? smoothstep(0.03, 0.0, abs(d) - vec2(0.44, 0.33))
+      // A ribbon needs its mullions. At 0.44 the dark gap between bays was 6% of the cell, which bloom
+      // closes completely, and a lit floor came out as one flat cream slab running the length of the
+      // building — the brightest thing in the frame with nothing in it. The mullion is a real interval
+      // now, and each bay carries its own brightness, because a floor is offices, not a light box.
+      vec2 rect = cls == 1 ? smoothstep(0.05, 0.0, abs(d) - vec2(0.40, 0.30))
                            : smoothstep(0.04, 0.0, abs(d) - vec2(0.25, 0.30));
+      if (cls == 1) b *= mix(0.40, 1.30, hash21(cc + id*3.31 + face));   // some bays brighter than the floor, not only dimmer
       // interior mapping: a shallow room behind the glass (back wall, ceiling lamp, dark floor) that parallaxes with the view
       float room = 1.0;
       if (b > 0.0 && t < 28.0){

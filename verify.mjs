@@ -198,7 +198,11 @@ let smokeFail = '';
   p2.on('console', m => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) bad.push('console: ' + m.text().slice(0, 120)); });
   const served = await fetch('http://127.0.0.1:5173/index.html').then(r => r.ok).catch(() => false);
   await p2.goto(served ? 'http://127.0.0.1:5173/index.html' : pathToFileURL(path.resolve('index.html')).href);
-  await p2.waitForTimeout(3000);
+  // Wait for the app, do not sleep at it. A fixed 3 s is a coin flip on a loaded machine, and a flaky
+  // check is worse than a slow one: it teaches you to re-run instead of to look.
+  await p2.waitForFunction(() => window.__lib && window.__stats, null, { timeout: 20000 }).catch(() => {});
+  if (served) await p2.waitForFunction(() => document.querySelectorAll('.track').length > 0, null, { timeout: 20000 }).catch(() => {});
+  await p2.waitForTimeout(400);
   const live = await p2.evaluate(() => ({ lib: !!window.__lib, stats: !!window.__stats, tracks: document.querySelectorAll('.track').length }));
   console.log(`smoke (${served ? 'http' : 'file://'}): lib=${live.lib} stats=${live.stats} tracks=${live.tracks}` + (bad.length ? ` errors=${bad.length}` : ''));
   const real = bad.filter(b => !/manifest\.json/.test(b));
