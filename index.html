@@ -2066,7 +2066,24 @@ void main(){
     // Screen-resolution finish. Everything above runs at the render resolution, so dropping renderScale
     // actually buys frame time; only these cheap, resolution-native touches stay at full size.
     vec2 wv = uv + (vec2(hash21(vec2(uFrame, 1.0)), hash21(vec2(uFrame, 2.0))) - 0.5) * 0.7 / uRes;   // gate weave
-    vec3 col = texture(tHistory, wv).rgb;
+    // The scene is composited at renderScale and arrives here to be blown up — 0.6 of the CSS width
+    // on a 2x display is a 3.3x linear upscale, and a bilinear fetch is a poor reconstruction of it.
+    // Contrast-adaptive sharpen: unsharp against the four neighbours, clamped to their own range so
+    // it cannot ring or halo. This does not invent detail, it stops the upscale from losing what the
+    // renderer already drew.
+    vec3 col;
+    {
+      vec2 px = 1.0 / uRes;
+      vec3 c0 = texture(tHistory, wv).rgb;
+      vec3 cn = texture(tHistory, wv + vec2(0.0, -px.y)).rgb;
+      vec3 cs = texture(tHistory, wv + vec2(0.0,  px.y)).rgb;
+      vec3 ce = texture(tHistory, wv + vec2( px.x, 0.0)).rgb;
+      vec3 cw = texture(tHistory, wv + vec2(-px.x, 0.0)).rgb;
+      vec3 mn = min(c0, min(min(cn, cs), min(ce, cw)));
+      vec3 mx = max(c0, max(max(cn, cs), max(ce, cw)));
+      vec3 sharp = c0 + (c0 - (cn + cs + ce + cw) * 0.25) * 0.75;
+      col = clamp(sharp, mn, mx);
+    }
     { vec4 tx = texture(tText, uv); col = mix(col, tx.rgb, tx.a); }    // title and lyrics, printed into the frame
     float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
     vec2 gf = gl_FragCoord.xy + vec2(uFrame*7.31, uFrame*3.17);
