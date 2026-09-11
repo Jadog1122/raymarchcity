@@ -593,6 +593,11 @@ float lotSDF(vec2 id, vec3 p, out int mat){                    // the building(s
     if (cc < br){ br = cc; mat = 1; }
     return br;
   }
+  // The building is material 1, whatever came before it. viaductSDF and civicSDF each set mat = 7 on
+  // their way past and nothing put it back, so on a viaduct row — one row in thirteen — every building
+  // in the block shaded as bare metal, with no windows in it at all. The two overrides at the end of
+  // this function are what decide whether the viaduct or the building actually won.
+  mat = 1;
   float h = hash21(id);
   int arch = archOf(id);
   vec2 q = p.xz - (id + 0.5)*CELL - lotOffset(id, hs);
