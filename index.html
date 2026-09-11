@@ -2736,7 +2736,12 @@ else {
   };
   const wake = () => { document.body.classList.remove('nocursor', 'hud-away'); clearTimeout(cursorTimer);
     cursorTimer = setTimeout(idle, 2500); };
-  window.addEventListener('mousemove', wake); window.addEventListener('keydown', wake);
+  // A mousemove that does not move must not wake anything: browsers emit those on focus, on scroll,
+  // and on a screen capture — which is how the capture tool kept the panel on screen while measuring
+  // whether the panel went off screen.
+  let mx = -1, my = -1;
+  window.addEventListener('mousemove', e => { if (e.clientX === mx && e.clientY === my) return; mx = e.clientX; my = e.clientY; wake(); });
+  window.addEventListener('keydown', wake);
   document.addEventListener('fullscreenchange', wake);
   player.addEventListener('play', wake); player.addEventListener('pause', wake);
   window.__toggleRecord = toggleRecord;
