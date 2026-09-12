@@ -5,6 +5,8 @@
 import { chromium } from 'playwright';
 import zlib from 'zlib';
 import fs from 'fs';
+import os from 'os';
+import path from 'path';
 
 
 // ---------- minimal PNG decode (8-bit RGB/RGBA, non-interlaced) ----------
@@ -41,7 +43,7 @@ function decodePNG(buf) {
   return { w, h, bpp, data: out };
 }
 
-const S = new URL('.', import.meta.url).pathname;
+const S = fs.mkdtempSync(path.join(os.tmpdir(), 'live-'));  // the shot is scratch, never the repo
 const URL_ = process.argv[2];
 const b = await chromium.launch({ headless: false });
 const ctx = await b.newContext({ viewport: { width: 1720, height: 720 }, deviceScaleFactor: 2 });
@@ -58,7 +60,7 @@ const st = await p.evaluate(() => ({ err: window.__stats ? window.__stats.shader
   fps: window.__stats && window.__stats.fps, lib: !!window.__lib,
   tracks: document.querySelectorAll('.track').length,
   hint: (document.getElementById('pickerHint') || {}).textContent }));
-const shot = S + 'live.png';
+const shot = path.join(S, 'live.png');
 await p.screenshot({ path: shot });
 const g = decodePNG(fs.readFileSync(shot));
 let mag = 0, nb = 0, sum = 0; const n = g.w * g.h, d = g.data, st_ = g.bpp;

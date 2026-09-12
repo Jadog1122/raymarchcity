@@ -11,3 +11,4 @@ music/
 # the self-contained build carries the audio; never commit it
 nightcity.html
 vendor/
+tools/live.png
