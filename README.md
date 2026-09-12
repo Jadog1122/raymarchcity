@@ -53,6 +53,15 @@ npm run verify # 13 张基准帧 + 真实页面冒烟 + 录屏吞吐 + 离线包
 
 ## 音乐
 
-仓库里没有音频。`music/` 和自包含的 `nightcity.html` 都在 `.gitignore` 里——那两首歌是有版权的，公开托管等于在分发它们。自己的歌拖进窗口就行。
+站上默认放的两首是 **Jadog** 的翻唱/改编：
+
+- *Superpowers (Night Remix)* — 原曲 Daniel Caesar
+- *記得 Remember (Intimate Remix)* — 原曲 張惠妹 A-Mei
+
+录音是 Jadog 自己的，词曲版权属于原作者。打开页面点任意处就开始放第一首，也可以按 `L` 换。
+
+把自己的 mp3 拖进窗口一样能放，存在浏览器本地，下次打开还在。
+
+`music/` 在 `.gitignore` 里是**白名单**而不是黑名单——只有明确列出来的那两首会进仓库，别的音频和 `.lrc` 都进不来。`npm run scan` 生成的 manifest 也只列仓库真的带着的文件，不会写出一个指向 404 的歌单。
 
 `npm run bundle` 会把音频、歌词和 three.js 全部内联进一个 `nightcity.html`，双击即可离线播放；这个文件只在本地，不进仓库。

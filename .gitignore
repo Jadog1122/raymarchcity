@@ -4,9 +4,13 @@ shots/
 tools/lyrics
 tools/Lyrics.app/Contents/MacOS/lyrics
 tools/Lyrics.app/Contents/_CodeSignature/
-# the audio stays out of the repo, and so does the manifest that names it —
-# the published page must fall back to "drag an mp3 in", not list tracks it cannot fetch
-music/
+# music/ is an allowlist, not a blocklist: only the tracks cleared for publishing are named here,
+# so nothing else in the folder can reach the repo by accident. Lyrics stay out — the .lrc files are
+# the original songs' words, and they are not ours to ship.
+music/*
+!music/manifest.json
+!music/Jadog - Superpowers (Night Remix).mp3
+!music/Jadog - 記得 Remember (Intimate Remix).mp3
 
 # the self-contained build carries the audio; never commit it
 nightcity.html

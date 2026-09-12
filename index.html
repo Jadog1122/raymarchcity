@@ -23,12 +23,22 @@
   .track .d{opacity:.35;font-variant-numeric:tabular-nums;font-size:11px}
   .track .k{width:5px;height:5px;border-radius:50%;background:#ffb36b;opacity:0;transition:opacity .2s}
   .track.hasLrc .k{opacity:.75}
-  #nowPlaying{display:flex;gap:8px;align-items:center;margin:2px 0 4px;opacity:.75;cursor:pointer}
-  #nowPlaying .bar{flex:1;height:12px;position:relative;cursor:pointer}
+  /* Two rows, not one. On a panel this narrow a single row makes the title, the lyric, the bar and
+     the clock fight over ~300px: the title truncated to six characters and the clock wrapped onto
+     three lines. Title and lyric get a row; the bar and the clock get a row. */
+  #nowPlaying{display:flex;flex-direction:column;gap:3px;margin:2px 0 4px;opacity:.75;cursor:pointer}
+  #nowPlaying .r{display:flex;gap:8px;align-items:center}
+  /* flex:1 alone gives the bar a 0 basis, and its siblings refuse to shrink below their text
+     (min-width:auto), so a long enough title or lyric line collapsed the bar to zero width and
+     scrubbing stopped working entirely. The bar keeps a floor; the text ellipsises instead. */
+  #nowPlaying .bar{flex:1 1 auto;min-width:90px;height:12px;position:relative;cursor:pointer}
+  #npTitle{flex:0 1 auto}
+  #npTitle,#npLrc{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #npTime{white-space:nowrap}
   #nowPlaying .bar::before{content:'';position:absolute;left:0;right:0;top:5px;height:2px;background:rgba(207,211,216,.2);transition:top .12s,height .12s}
   #nowPlaying .bar i{position:absolute;left:0;top:5px;height:2px;background:#ffb36b;width:0;transition:top .12s,height .12s}
   #nowPlaying .bar:hover::before,#nowPlaying .bar:hover i{top:4px;height:4px}
-  #npLrc{opacity:.45;font-size:11px;white-space:nowrap}
+  #npLrc{opacity:.45;font-size:11px}
   .hidden{display:none!important}
   #panel,#bars{transition:opacity .55s ease}
   body.hud-away #panel,body.hud-away #bars{opacity:0;pointer-events:none}
@@ -63,7 +73,7 @@
   <p id="pickerHint">读取歌单…</p>
 </div>
 <div id="panel" class="hidden">
-  <div id="nowPlaying" title="点击暂停 / 继续 · 拖进度条跳转"><span id="npTitle">—</span><span id="npLrc"></span><span class="bar"><i id="npBar"></i></span><span id="npTime" style="font-variant-numeric:tabular-nums;font-size:11px">0:00</span></div>
+  <div id="nowPlaying" title="点击暂停 / 继续 · 拖进度条跳转"><div class="r"><span id="npTitle">—</span><span id="npLrc"></span></div><div class="r"><span class="bar"><i id="npBar"></i></span><span id="npTime" style="font-variant-numeric:tabular-nums;font-size:11px">0:00</span></div></div>
   <div id="src">
     <button id="btnLib">歌单</button>
     <button id="btnMic">麦克风</button>

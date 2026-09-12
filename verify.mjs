@@ -236,10 +236,22 @@ let smokeFail = '';
     else if (!started) smokeFail = 'one click on the canvas did not start the cued track';
   }
 
-  // lyrics must follow the audio even when rendering is paused
+  // Lyrics must follow the audio even when rendering is paused. The words themselves are not what is
+  // under test — the clock is — so the check seeds its own .lrc into the page's IndexedDB cache instead
+  // of asking lrclib for them. That removes a third-party service from the critical path and, more to
+  // the point, makes the check work for any track: a cover will never match on lrclib by design (the
+  // artist has to agree), so a lyric lookup is not something verify can assume will succeed.
   if (!smokeFail && served && live.tracks > 0) {
-    // playback is already running (the cue check started it) and that hides the overlay — reopen the
-    // picker the way a user would, with L, rather than poking the class list.
+    const SEED = ['[00:10.00]first seeded line', '[00:20.00]second seeded line',
+                  '[00:30.00]third seeded line', '[00:40.00]fourth seeded line'].join('\n');
+    await p2.evaluate(async lrc => {
+      const id = window.__lib.tracks[0].id;
+      const db = await new Promise(r => { const q = indexedDB.open('nightcity', 1); q.onsuccess = () => r(q.result); });
+      await new Promise(r => { const tx = db.transaction('lyrics', 'readwrite');
+        tx.objectStore('lyrics').put({ id, lrc, at: Date.now() }); tx.oncomplete = r; tx.onerror = r; });
+    }, SEED);
+    await p2.reload({ waitUntil: 'load' });
+    await p2.waitForFunction(() => document.querySelectorAll('.track').length > 0, null, { timeout: 20000 });
     if (await p2.evaluate(() => document.getElementById('overlay').classList.contains('hidden'))) await p2.keyboard.press('l');
     await p2.waitForSelector('.track:nth-child(1)', { state: 'visible', timeout: 10000 });
     await p2.click('.track:nth-child(1)');
@@ -261,9 +273,17 @@ let smokeFail = '';
   // The transport controls, asserted directly rather than through a screenshot: dragging the progress
   // bar has to seek and must not also toggle playback, and the volume keys have to move the volume.
   if (!smokeFail && served) {
+    // The HUD fades after 2.5 s of stillness while a track plays, so by now the bar may be invisible
+    // and unclickable. Wake it the way a user does — with an actual movement; a mousemove that does
+    // not move is ignored on purpose — and wait for it, rather than relying on the test being quick.
+    await p2.mouse.move(200, 300); await p2.mouse.move(240, 320);
+    await p2.waitForFunction(() => !document.body.classList.contains('hud-away'), null, { timeout: 5000 }).catch(() => {});
     const bar = await p2.$('#nowPlaying .bar');
     const box = bar && await bar.boundingBox();
+    // assert the bar's width directly: a zero-width bar makes every scrub land at 0 and the failure
+    // reads as "seeking is broken" instead of "the layout collapsed", which is a much longer hunt.
     if (!box) smokeFail = 'no progress bar to scrub';
+    else if (box.width < 60) smokeFail = `progress bar collapsed to ${box.width.toFixed(0)}px wide (title/lyric squeezed it out)`;
     else {
       await p2.mouse.click(box.x + box.width * 0.6, box.y + box.height / 2);
       await p2.waitForTimeout(500);

@@ -71,7 +71,17 @@ export async function lookup(artist, title, dur, opts = {}){
   return { lyrics: best.x.syncedLyrics, via: `search "${best.q}"`, artist: best.x.artistName, track: best.x.trackName, diff: best.dd };
 }
 
-const files = fs.readdirSync(DIR).filter(f => AUDIO.test(f)).sort();
+// The manifest names what the repo actually carries. A track that is gitignored will 404 on the
+// published site, so it must not appear here either — the allowlist in .gitignore is the one source
+// of truth for "what ships", and this reads it rather than keeping a second copy of the decision.
+function shipped(f){
+  try { execFileSync('git', ['check-ignore', '-q', path.join(DIR, f)], { stdio: 'ignore' }); return false; }
+  catch { return true; }                                   // non-zero exit from check-ignore = not ignored
+}
+const all = fs.readdirSync(DIR).filter(f => AUDIO.test(f)).sort();
+const files = all.filter(shipped);
+const held = all.filter(f => !shipped(f));
+if (held.length) console.log(`  (${held.length} 个本地文件不进 manifest，因为 .gitignore 挡着：${held.join(', ')})`);
 const tracks = files.map(f => { const { artist, title } = parseName(f); return { file: f, artist, title, duration: duration(path.join(DIR, f)) }; });
 fs.writeFileSync(path.join(DIR, 'manifest.json'), JSON.stringify({ tracks }, null, 2) + '\n');
 console.log(`manifest.json: ${tracks.length} tracks`);
