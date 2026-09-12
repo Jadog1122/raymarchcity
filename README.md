@@ -4,7 +4,9 @@
 
 **在线**：<https://jadog1122.github.io/raymarchcity/>（需要 WebGL2 桌面浏览器；打开后把 mp3 拖进窗口）
 
-<!-- screenshot -->
+![](docs/hero.png)
+
+![](docs/aerial.png)
 
 ## 跑起来
 

@@ -91,3 +91,11 @@
 - Python 补丁脚本在末尾统一写盘：任一断言失败＝整批回滚，必须重跑整批，不要只补失败的那一条。
 - 被测对象变成非均匀的（分区城市），基准就必须从一张变成一组；反复为过阈值而调阈值＝基准不具代表性。
 - 能直接断言的东西不要用图像代理（构图 → 断言相机参数，不是亮度重心）。
+
+## 发布（M29）
+- 公开仓库：`https://github.com/Jadog1122/raymarchcity`，Pages 从 `master` 根目录发到 <https://jadog1122.github.io/raymarchcity/>。改完 push 上去 Pages 自己重建，约一分钟。
+- **发布 = 换了一台机器**。push 前把 `git ls-files` 整个读一遍，对每个文件问「它引用的东西也在仓库里吗」：manifest 列的 mp3、app bundle 缺的可执行文件、`<link>` 指的图标。
+- `.gitignore` 里有某个文件 ≠ 它没被跟踪（忽略规则晚于文件加入时）。`git check-ignore` 默认跳过已跟踪文件，要 `--no-index` 才看得见。
+- 上线后必须用**访客的 URL、不带任何调试参数**真打开一次（`tools/live.mjs <url>`）：`?test=1` 会绕过 `if (!TEST)` 里的整个播放器，测的是渲染不是访客路径。
+- 页面里引用的一切都要内联成 data URI（favicon 也是），否则 `file://` 双击会多一次取不到的请求。
+- 音频和 `nightcity.html` 不进仓库：公开托管有版权的录音就是在分发它。访客自带 mp3。

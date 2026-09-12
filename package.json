@@ -7,14 +7,20 @@
     "serve": "node tools/serve.mjs 5173",
     "lyrics": "node tools/fetch-lyrics.mjs",
     "bundle": "node tools/bundle.mjs",
-    "scan": "node tools/scan-music.mjs"
+    "scan": "node tools/scan-music.mjs",
+    "live": "node tools/live.mjs"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "",
+  "description": "Audio-driven raymarched night city in a single fragment shader",
   "devDependencies": {
     "playwright": "^1.63.0"
   },
-  "type": "module"
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Jadog1122/raymarchcity.git"
+  },
+  "homepage": "https://jadog1122.github.io/raymarchcity/"
 }
