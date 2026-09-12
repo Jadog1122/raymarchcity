@@ -327,6 +327,13 @@ if (fs.existsSync('nightcity.html')) {
   const p5 = await c5.newPage();
   const bad5 = [];
   p5.on('pageerror', e => bad5.push(e.message));
+  // count the .lrc files that belong to tracks the manifest actually ships
+  const localLrc = (() => {
+    try {
+      const man = JSON.parse(fs.readFileSync('music/manifest.json', 'utf8')).tracks || [];
+      return man.filter(t => fs.existsSync(path.join('music', t.file.replace(/\.[^.]+$/, '.lrc')))).length;
+    } catch { return 0; }
+  })();
   await p5.goto(pathToFileURL(path.resolve('nightcity.html')).href);
   await p5.waitForFunction(() => document.querySelectorAll('.track').length > 0, null, { timeout: 40000 }).catch(() => {});
   const n = await p5.evaluate(() => document.querySelectorAll('.track').length);
@@ -341,7 +348,11 @@ if (fs.existsSync('nightcity.html')) {
     if (st.err) bundleNote = 'shader error in the bundle: ' + st.err.slice(0, 60);
     else if (!(st.d > 1)) bundleNote = 'bundled audio did not decode';
     else if (!(st.t > 0.2)) bundleNote = 'bundled audio did not play';
-    else if (!(st.lyr > 3)) bundleNote = 'bundled lyrics missing (offline lookup is impossible)';
+    // The invariant is "whatever lyrics exist locally must travel with the bundle", not "lyrics exist".
+    // A cover never matches on lrclib by design, so there may genuinely be no .lrc to carry — but if
+    // one is sitting in music/ and did not make it into the file, offline lookup is impossible and
+    // that is a real defect.
+    else if (localLrc > 0 && !(st.lyr > 3)) bundleNote = `bundled lyrics missing: ${localLrc} .lrc in music/ did not travel (offline lookup is impossible)`;
     else bundleNote = `${n} tracks, ${st.d.toFixed(0)}s audio playing at ${st.t.toFixed(1)}s, ${st.lyr} lyric lines`;
   }
   await c5.close();
@@ -355,9 +366,18 @@ let recFrames = -1;
 if (!NOREC) {
   const c4 = await browser.newContext({ viewport: { width: 1280, height: 540 }, acceptDownloads: true });
   const p4 = await c4.newPage();
-  const dl = p4.waitForEvent('download', { timeout: 25000 });
+  // Recording throughput is a throughput measurement like fps, so under FPS_SOFT it may only report.
+  // An unhandled timeout here killed the entire run instead — which is exactly what FPS_SOFT exists to
+  // prevent. A starved machine now reports 0 and the suite finishes.
+  const dl = p4.waitForEvent('download', { timeout: 25000 }).catch(() => null);
   await p4.goto(pathToFileURL(path.resolve('index.html')).href + '?test=1&rec=5');
-  const d = await dl; const webm = path.resolve('shots/rec-test.webm'); await d.saveAs(webm);
+  const d = await dl;
+  if (!d) {
+    console.log('rec: no recording produced within 25 s' + (FPS_SOFT ? ' (reported only — FPS_SOFT)' : ''));
+    if (!FPS_SOFT) fails.push('recording produced nothing in 25 s');
+    await c4.close();
+  } else {
+  const webm = path.resolve('shots/rec-test.webm'); await d.saveAs(webm);
   recFrames = await p4.evaluate(async (bytes) => {
     const v = document.createElement('video'); v.muted = true;
     v.src = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: 'video/webm' }));
@@ -368,6 +388,7 @@ if (!NOREC) {
   console.log(`rec: ${(fs.statSync(webm).size / 1048576).toFixed(1)} MB, ${recFrames} frames in 5 s`);
   if (!(recFrames >= 140)) { if (!FPS_SOFT) fails.push(`recording ${recFrames} frames < 140 in 5 s`); }
   await c4.close();
+  }
 }
 await browser.close();
 

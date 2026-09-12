@@ -60,6 +60,11 @@
   button:hover{border-color:#ffb870}
   button.on{border-color:#ffb870;color:#ffb870}
   #picker .track.cued{border-color:rgba(255,184,112,.55);background:rgba(255,184,112,.07)}
+  #boot{display:flex;flex-direction:column;align-items:center;gap:7px}
+  #bootBar{width:260px;height:2px;background:rgba(207,211,216,.18);overflow:hidden}
+  #bootBar i{display:block;height:100%;width:6%;background:#ffb870;transition:width .3s ease}
+  /* #overlay p is (1,0,1); this has to out-specify it or the opacity below never applies */
+  #overlay #bootMsg{margin:0;font-size:12px;opacity:.55;letter-spacing:.06em;min-height:1.2em;text-align:center}
 </style>
 <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2032%2032%27%3E%3Crect%20width%3D%2732%27%20height%3D%2732%27%20fill%3D%27%23080b12%27%2F%3E%3Ccircle%20cx%3D%2723%27%20cy%3D%278%27%20r%3D%273%27%20fill%3D%27%23e8e2d8%27%20opacity%3D%27.85%27%2F%3E%3Cpath%20d%3D%27M2%2030V14h7v16zM11%2030V8h6v22zM19%2030V18h5v12zM26%2030V21h4v9z%27%20fill%3D%27%23131a26%27%2F%3E%3Cg%20fill%3D%27%23ffb870%27%3E%3Crect%20x%3D%274%27%20y%3D%2717%27%20width%3D%272%27%20height%3D%272%27%2F%3E%3Crect%20x%3D%274%27%20y%3D%2723%27%20width%3D%272%27%20height%3D%272%27%2F%3E%3Crect%20x%3D%2713%27%20y%3D%2711%27%20width%3D%272%27%20height%3D%272%27%2F%3E%3Crect%20x%3D%2713%27%20y%3D%2719%27%20width%3D%272%27%20height%3D%272%27%2F%3E%3Crect%20x%3D%2720.5%27%20y%3D%2721%27%20width%3D%272%27%20height%3D%272%27%2F%3E%3Crect%20x%3D%2727%27%20y%3D%2724%27%20width%3D%272%27%20height%3D%272%27%2F%3E%3C%2Fg%3E%3Crect%20x%3D%2712%27%20y%3D%2725%27%20width%3D%274%27%20height%3D%271%27%20fill%3D%27%23ff3caa%27%2F%3E%3Crect%20x%3D%2720%27%20y%3D%2726%27%20width%3D%274%27%20height%3D%271%27%20fill%3D%27%2335d6e8%27%2F%3E%3C%2Fsvg%3E">
 <script type="importmap">
@@ -69,6 +74,7 @@
 <body>
 <div id="overlay">
   <h1>NIGHT CITY</h1>
+  <div id="boot"><div id="bootBar"><i></i></div><p id="bootMsg">加载引擎…</p></div>
   <div id="picker"></div>
   <p id="pickerHint">读取歌单…</p>
 </div>
@@ -2484,7 +2490,10 @@ document.body.appendChild(renderer.domElement);
   stats.gpu = dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
 }
 
-let renderScale = parseFloat(params.get('scale') ?? '0.75');
+// A first visit does not know what machine it is on. Start one step down and let the measured frame
+// cost decide within a few frames — a full-size first frame is exactly what freezes a weak GPU, and it
+// cannot be interrupted once issued. TEST keeps 0.75 so the benchmark frames stay comparable.
+let renderScale = parseFloat(params.get('scale') ?? (TEST ? '0.75' : '0.6'));
 const rt = new THREE.WebGLRenderTarget(2, 2, {                    // linear HDR scene, alpha = depth
   minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
   depthBuffer: false, stencilBuffer: false, type: THREE.HalfFloatType
@@ -2759,7 +2768,11 @@ const postU = {
   tScene: { value: rt.texture }, tBright: { value: rtBright.texture },
   uRes: { value: new THREE.Vector2(1, 1) }, uBrightRes: { value: new THREE.Vector2(1, 1) }, uSceneRes: { value: new THREE.Vector2(1, 1) },
   uMode: { value: 0 }, uTime: { value: 0 }, uFrame: { value: 0 },
-  uBloomThr: { value: 0.8 }, uBloomStr: { value: 0.35 }, uRain: { value: 0.5 }, uExposure: { value: 1.25 }, uAA: { value: params.get('noaa') ? 0 : 1 }, uMood: uniforms.uMood, tHistory: { value: rtHist[1].texture }, uBlend: { value: 0 }, tText: { value: textTex }, uRig: { value: 1 }, uFocus: { value: 7 }, uAperture: { value: 2.5 }, tTaaHist: { value: rtTaa[1].texture },
+  uBloomThr: { value: 0.8 }, /* 0.35 was never seen by anyone: the bright pass had its own target bound
+     to tBright, so every glDrawElements for it was rejected as a feedback loop and rtBright never
+     filled. With the pass actually running, 0.35 blows the window grid into blobs — the whole look
+     was built without bloom, so this is the value that adds the halo back without eating the detail. */
+  uBloomStr: { value: 0.12 }, uRain: { value: 0.5 }, uExposure: { value: 1.25 }, uAA: { value: params.get('noaa') ? 0 : 1 }, uMood: uniforms.uMood, tHistory: { value: rtHist[1].texture }, uBlend: { value: 0 }, tText: { value: textTex }, uRig: { value: 1 }, uFocus: { value: 7 }, uAperture: { value: 2.5 }, tTaaHist: { value: rtTaa[1].texture },
   uCamRo: uniforms.uCamRo, uCamRt: uniforms.uCamRt, uCamUp: uniforms.uCamUp, uCamFw: uniforms.uCamFw, uFocal: uniforms.uFocal, uJitter: uniforms.uJitter,
   uPrevRo: { value: new THREE.Vector3() }, uPrevRt: { value: new THREE.Vector3() }, uPrevUp: { value: new THREE.Vector3() }, uPrevFw: { value: new THREE.Vector3() }, uPrevFocal: { value: 1.7 }, uTaa: { value: 0 }
 };
@@ -2910,6 +2923,7 @@ let elementSource = null;
 
 // ---------- library: a playlist backed by IndexedDB (dropped files persist, lyrics are cached) ----------
 const LIB = { tracks: [], current: -1, cued: -1, db: null };
+let libReady = Promise.resolve();   // resolves once the manifest and IndexedDB have been read
 window.__lib = LIB;
 function openDB(){
   return new Promise(res => {
@@ -3234,10 +3248,9 @@ function toggleRecord(){
   recTimer = setTimeout(() => rec && rec.stop(), recSeconds*1000);
 }
 
-if (TEST && REC){ setTimeout(() => toggleRecord(), 1500); }   // ?test=1&rec=N: auto-record N seconds
 if (TEST){ overlay.classList.add('hidden'); }
 else {
-  loadLibrary();
+  libReady = loadLibrary();
   setInterval(updateText, 80);                                  // keeps the lyric on time no matter what the renderer is doing
   player.addEventListener('timeupdate', updateText);
   player.addEventListener('seeked', updateText);
@@ -3398,8 +3411,13 @@ function renderFrame(now){
   postU.tScene.value = rtTaa[taaCur].texture;
   taaCur = 1 - taaCur; camPrev = c;
   postU.uMode.value = 0; postU.uRes.value.set(rtBright.width, rtBright.height);
+  // tBright is this pass's own render target. GL checks bindings, not which branch the shader takes,
+  // so leaving it bound is a feedback loop on every frame — undefined behaviour. Apple's driver only
+  // warns; others are free to return garbage or fall off the fast path. Unbind it for this pass.
+  postU.tBright.value = null;
   renderer.setRenderTarget(rtBright);
   renderer.render(scenePost, cam);                 // bright extraction (+ auto mipmaps)
+  postU.tBright.value = rtBright.texture;
   postU.uMode.value = 1; postU.uRes.value.set(rt.width, rt.height);
   postU.tHistory.value = rtHist[1 - histCur].texture;
   postU.uBlend.value = (TEST && !params.get('taa') && !REC) ? 0 : (cutFrames > 0 ? 0 : 0.08);
@@ -3418,6 +3436,19 @@ function frame(now){
   if (now - lastRender < 1000/60 - 2.5) return;   // 60 fps cap
   const dt = lastRender ? now - lastRender : 16.7;
   lastRender = now;
+  // adaptScale() needs two one-second samples before it moves. On a machine where a single frame takes
+  // seconds that is minutes of frozen screen with nothing drawn — which is exactly what it looks like
+  // from the outside: the UI is up, the canvas is black, the fan is at full. dt is this frame's real
+  // cost, so while the page is still starting, act on it directly: down hard when it is slow, and back
+  // up quickly when it is not, so a fast machine loses only a few soft frames.
+  if (!TEST && manualScale === 0 && stats.frames < 150){
+    if (dt > 45 && renderScale > 0.26){
+      scaleFloor = Math.min(scaleFloor, 0.25);
+      window.__setRenderScale(renderScale * (dt > 250 ? 0.55 : 0.85));
+    } else if (dt < 19 && renderScale < 1.0){
+      window.__setRenderScale(Math.min(1.0, renderScale * 1.18));
+    }
+  }
 
   const t = TEST ? FIXED_TIME : (now - t0) / 1000;
   uniforms.iTime.value = t;
@@ -3474,7 +3505,84 @@ function frame(now){
     statLine.textContent = `fps ${stats.fps} · scale ${renderScale.toFixed(2)} · ${stats.rtW}x${stats.rtH}` + (audio.bpm ? ` · ${audio.bpm.toFixed(0)} bpm · S${audio.section}` : '');
   }
 }
-requestAnimationFrame(frame);
+// ---------- first load ----------
+// The city is one enormous shader, and on a slow GPU compiling it is the longest thing that happens
+// on a first visit — with a black screen and nothing to read. Report the stages that can actually
+// cost time (engine, compile, audio) from real signals; never animate a fake bar.
+const bootEl = document.getElementById('boot'), bootBar = document.querySelector('#bootBar i'), bootMsg = document.getElementById('bootMsg');
+function bootAt(pct, msg){
+  if (!bootEl) return;
+  bootBar.style.width = Math.max(0, Math.min(100, pct)) + '%';
+  if (msg !== undefined) bootMsg.textContent = msg;
+}
+// Two frames, not one: the first schedules the paint, the second lands after it. The timeout is not
+// belt-and-braces — a hidden or occluded tab may never run rAF at all, and the whole boot sequence
+// hangs off this. Nothing that has to finish may depend only on a frame callback.
+const painted = () => new Promise(r => {
+  let done = false; const fin = () => { if (!done){ done = true; r(); } };
+  requestAnimationFrame(() => requestAnimationFrame(fin));
+  setTimeout(fin, 250);
+});
+
+// The cued track is already downloading before any gesture — the one stage with a true percentage.
+async function bootAudio(){
+  await libReady.catch(() => {});
+  if (LIB.cued < 0 || !player.src) return;                   // nothing cued: nothing to wait for
+  await new Promise(res => {
+    const frac = () => { const d = player.duration || (LIB.tracks[LIB.cued] || {}).duration || 0;
+      const b = player.buffered.length ? player.buffered.end(player.buffered.length - 1) : 0;
+      return d > 0 ? Math.min(1, b / d) : 0; };
+    const tick = () => { const f = frac(); bootAt(62 + 38 * f, '缓冲音乐 ' + Math.round(100 * f) + '%');
+      if (player.readyState >= 3) done(); };
+    const done = () => { clearTimeout(give); clearInterval(iv);
+      player.removeEventListener('progress', tick); player.removeEventListener('canplay', done); res(); };
+    const give = setTimeout(done, 20000);                    // a stalled CDN must not hold the screen
+    const iv = setInterval(tick, 150);
+    player.addEventListener('progress', tick); player.addEventListener('canplay', done);
+    tick();
+  });
+}
+
+(async function bootUp(){
+  bootAt(18, '准备渲染器…');
+  await painted();                                            // the message must be on screen first
+  bootAt(26, '编译着色器…（第一次打开最慢）');
+  await painted();
+  const t = performance.now();
+  try {
+    // compileAsync uses KHR_parallel_shader_compile where it exists, so the page stays alive and the
+    // bar can still move. compile() is the blocking fallback.
+    if (renderer.compileAsync){ await renderer.compileAsync(sceneRT, cam); await renderer.compileAsync(scenePost, cam); }
+    else { renderer.compile(sceneRT, cam); renderer.compile(scenePost, cam); }
+  } catch (e){ stats.shaderError = (stats.shaderError + '\n' + (e && e.message || e)).trim(); }
+  stats.compileMs = Math.round(performance.now() - t);
+  // SwiftShader / llvmpipe means the browser gave up on the GPU. This shader will never be interactive
+  // there, and grinding silently is the worst of both — say which renderer it is and clamp to the floor.
+  const soft = /swiftshader|llvmpipe|software|basic render|generic render/i.test(stats.gpu || '');
+  if (soft && !TEST){ scaleFloor = 0.25; renderScale = 0.25; resize(); }
+  bootAt(62, stats.shaderError ? '着色器编译失败'
+    : soft ? '这台机器在用软件渲染（' + String(stats.gpu).slice(0, 42) + '），会很慢'
+    : '编译完成 · ' + stats.compileMs + ' ms');
+  if (soft) bootMsg.dataset.keep = '1';               // leave the warning up; it is not a loading step
+  requestAnimationFrame(frame);                               // only now — the first frame hid the stall
+  // ?test=1&rec=N: auto-record N seconds. It has to hang off the loop actually starting, not off a
+  // fixed 1500 ms — the compile above has no fixed duration, and recording a canvas that has never
+  // been drawn captures nothing at all.
+  if (TEST && REC) setTimeout(() => toggleRecord(), 1500);
+  if (TEST){ bootEl.classList.add('hidden'); return; }
+  await painted();
+  await bootAudio();
+  // If the machine is still crawling once everything is loaded, the useful thing on screen is not a
+  // finished progress bar — it is what this machine actually is. Leave it up so it can be read off
+  // and reported; there is nothing else to go on from another computer.
+  const slow = stats.fps > 0 && stats.fps < 15;
+  if (bootMsg.dataset.keep || slow || stats.compileMs > 4000){
+    bootAt(100, `${stats.fps} fps · 编译 ${stats.compileMs}ms · scale ${renderScale.toFixed(2)} · ${String(stats.gpu).slice(0, 46)}`);
+    return;
+  }
+  bootAt(100, '');
+  bootEl.classList.add('hidden');
+})();
 </script>
 </body>
 </html>
