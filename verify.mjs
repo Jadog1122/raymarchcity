@@ -221,8 +221,27 @@ let smokeFail = '';
   if (real.length) smokeFail = 'runtime errors on the real page: ' + real[0];
   else if (!live.lib || !live.stats) smokeFail = 'app did not initialise on the real page';
   else if (served && live.tracks === 0) smokeFail = 'playlist did not render on the real page';
+  // Landing cued: one click anywhere has to start the music, not open a menu to pick from. All of this
+  // sits inside `if (!TEST)`, so no static frame can see it — it only exists if asserted on the real page.
+  if (!smokeFail && served && live.tracks > 0) {
+    const hint = (await p2.textContent('#pickerHint')) || '';
+    const preloaded = await p2.evaluate(() => !!player.src && player.preload === 'auto');
+    await p2.mouse.click(100, 100);                               // empty canvas, not a control
+    const started = await p2.waitForFunction(() => !player.paused && player.currentTime > 0.05,
+      null, { timeout: 10000 }).then(() => true).catch(() => false);
+    const at = await p2.evaluate(() => player.currentTime);
+    console.log(`smoke cue: preloaded=${preloaded} · one click -> ${started ? 'playing at ' + at.toFixed(2) + 's' : 'SILENT'}`);
+    if (!/点任意处播放/.test(hint)) smokeFail = 'the default track was not cued on landing: "' + hint.slice(0, 40) + '"';
+    else if (!preloaded) smokeFail = 'the cued track was not buffering before the gesture';
+    else if (!started) smokeFail = 'one click on the canvas did not start the cued track';
+  }
+
   // lyrics must follow the audio even when rendering is paused
   if (!smokeFail && served && live.tracks > 0) {
+    // playback is already running (the cue check started it) and that hides the overlay — reopen the
+    // picker the way a user would, with L, rather than poking the class list.
+    if (await p2.evaluate(() => document.getElementById('overlay').classList.contains('hidden'))) await p2.keyboard.press('l');
+    await p2.waitForSelector('.track:nth-child(1)', { state: 'visible', timeout: 10000 });
     await p2.click('.track:nth-child(1)');
     await p2.waitForFunction(() => window.__lyrics && window.__lyrics().length > 3, null, { timeout: 25000 }).catch(() => {});
     await p2.waitForTimeout(800);

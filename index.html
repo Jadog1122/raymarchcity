@@ -49,6 +49,7 @@
   button{background:rgba(20,24,32,.7);color:#cfd3d8;border:1px solid rgba(207,211,216,.25);padding:6px 12px;font:12px inherit;cursor:pointer;border-radius:3px}
   button:hover{border-color:#ffb870}
   button.on{border-color:#ffb870;color:#ffb870}
+  #picker .track.cued{border-color:rgba(255,184,112,.55);background:rgba(255,184,112,.07)}
 </style>
 <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2032%2032%27%3E%3Crect%20width%3D%2732%27%20height%3D%2732%27%20fill%3D%27%23080b12%27%2F%3E%3Ccircle%20cx%3D%2723%27%20cy%3D%278%27%20r%3D%273%27%20fill%3D%27%23e8e2d8%27%20opacity%3D%27.85%27%2F%3E%3Cpath%20d%3D%27M2%2030V14h7v16zM11%2030V8h6v22zM19%2030V18h5v12zM26%2030V21h4v9z%27%20fill%3D%27%23131a26%27%2F%3E%3Cg%20fill%3D%27%23ffb870%27%3E%3Crect%20x%3D%274%27%20y%3D%2717%27%20width%3D%272%27%20height%3D%272%27%2F%3E%3Crect%20x%3D%274%27%20y%3D%2723%27%20width%3D%272%27%20height%3D%272%27%2F%3E%3Crect%20x%3D%2713%27%20y%3D%2711%27%20width%3D%272%27%20height%3D%272%27%2F%3E%3Crect%20x%3D%2713%27%20y%3D%2719%27%20width%3D%272%27%20height%3D%272%27%2F%3E%3Crect%20x%3D%2720.5%27%20y%3D%2721%27%20width%3D%272%27%20height%3D%272%27%2F%3E%3Crect%20x%3D%2727%27%20y%3D%2724%27%20width%3D%272%27%20height%3D%272%27%2F%3E%3C%2Fg%3E%3Crect%20x%3D%2712%27%20y%3D%2725%27%20width%3D%274%27%20height%3D%271%27%20fill%3D%27%23ff3caa%27%2F%3E%3Crect%20x%3D%2720%27%20y%3D%2726%27%20width%3D%274%27%20height%3D%271%27%20fill%3D%27%2335d6e8%27%2F%3E%3C%2Fsvg%3E">
 <script type="importmap">
@@ -2898,7 +2899,7 @@ async function useMic(){
 let elementSource = null;
 
 // ---------- library: a playlist backed by IndexedDB (dropped files persist, lyrics are cached) ----------
-const LIB = { tracks: [], current: -1, db: null };
+const LIB = { tracks: [], current: -1, cued: -1, db: null };
 window.__lib = LIB;
 function openDB(){
   return new Promise(res => {
@@ -3018,7 +3019,18 @@ async function loadLibrary(){
     t.id = trackId(t); if (!LIB.tracks.some(x => x.id === t.id)){ t.url = URL.createObjectURL(rec.blob); LIB.tracks.push(t); }
   }
   renderPicker();
+  armDefault();
   for (const t of LIB.tracks) ensureLyrics(t);               // fills in the lyrics dots as they arrive
+}
+// Land ready to play. No browser will emit sound before a gesture — what can be removed is everything
+// between the gesture and the music: the track is chosen and already buffering, so the first click
+// anywhere (or Space) plays it instead of opening a menu to pick from.
+function armDefault(){
+  if (LIB.current >= 0 || !LIB.tracks.length) return;
+  LIB.cued = 0;
+  const t = LIB.tracks[0];
+  if (t.url){ player.preload = 'auto'; player.src = t.url; player.dataset.tid = t.id; }
+  renderPicker();
 }
 const mmss = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 function renderPicker(){
@@ -3026,7 +3038,8 @@ function renderPicker(){
   el.innerHTML = '';
   LIB.tracks.forEach((t, i) => {
     const d = document.createElement('div');
-    d.className = 'track' + (t.lrc ? ' hasLrc' : '') + (i === LIB.current ? ' on' : '');
+    d.className = 'track' + (t.lrc ? ' hasLrc' : '') + (i === LIB.current ? ' on' : '')
+                             + (LIB.current < 0 && i === LIB.cued ? ' cued' : '');
     d.innerHTML = `<span class="k"></span><span class="t"></span><span class="a"></span><span class="d">${mmss(t.duration)}</span>`;
     d.querySelector('.t').textContent = t.title;
     d.querySelector('.a').textContent = t.artist;
@@ -3034,14 +3047,16 @@ function renderPicker(){
     d.onclick = () => playTrack(i);
     el.appendChild(d);
   });
-  hint.textContent = LIB.tracks.length ? '点击歌曲开始 · 或把 mp3 拖进窗口 · 亮点表示已有逐行歌词' : '把 mp3 拖进窗口开始';
+  hint.textContent = !LIB.tracks.length ? '把 mp3 拖进窗口开始'
+    : LIB.current < 0 && LIB.cued >= 0 ? `点任意处播放《${LIB.tracks[LIB.cued].title}》 · 或直接选一首 · 亮点表示已有逐行歌词`
+    : '点击歌曲开始 · 或把 mp3 拖进窗口 · 亮点表示已有逐行歌词';
 }
 async function playTrack(i){
   const t = LIB.tracks[i]; if (!t) return;
   ensureCtx(); await audio.ctx.resume();
   disconnectSource();
   if (!t.url && t.blob) t.url = URL.createObjectURL(t.blob);
-  player.src = t.url;
+  if (player.dataset.tid !== t.id){ player.src = t.url; player.dataset.tid = t.id; }   // already buffering if armDefault cued it
   if (!elementSource) elementSource = audio.ctx.createMediaElementSource(player);
   audio.source = elementSource;
   audio.source.connect(audio.analyser);
@@ -3216,7 +3231,14 @@ else {
   setInterval(updateText, 80);                                  // keeps the lyric on time no matter what the renderer is doing
   player.addEventListener('timeupdate', updateText);
   player.addEventListener('seeked', updateText);
-  overlay.addEventListener('click', e => { if (e.target === overlay || e.target.tagName === 'H1' || e.target.tagName === 'P') { if (LIB.current >= 0) overlay.classList.add('hidden'); else start(); } });
+  overlay.addEventListener('click', e => { if (e.target === overlay || e.target.tagName === 'H1' || e.target.tagName === 'P') { if (LIB.current >= 0 || LIB.cued >= 0) overlay.classList.add('hidden'); else start(); } });
+  // pointerdown, not click: it is the earliest event that counts as a gesture, so the audio graph
+  // resumes a frame sooner. Controls keep their own meaning — this only catches the empty canvas.
+  window.addEventListener('pointerdown', e => {
+    if (LIB.current >= 0 || LIB.cued < 0) return;
+    if (e.target.closest && e.target.closest('#panel, #picker, button, input, a')) return;
+    playTrack(LIB.cued);
+  });
   document.getElementById('btnLib').addEventListener('click', showPicker);
   document.getElementById('nowPlaying').addEventListener('click', () => { player.paused ? player.play() : player.pause(); });
   // Scrubbing. The bar is 12 px of hit area around a 2 px line, because a 2 px target is not a target,
@@ -3279,7 +3301,8 @@ else {
     const k = e.key.toLowerCase();
     if (k === 'h'){ barsVisible = !barsVisible; bars.classList.toggle('hidden', !barsVisible); srcBox.classList.toggle('hidden', !barsVisible); }
     if (k === 'l'){ overlay.classList.contains('hidden') ? showPicker() : overlay.classList.add('hidden'); }
-    if (e.code === 'Space'){ e.preventDefault(); player.paused ? player.play() : player.pause(); }
+    if (e.code === 'Space'){ e.preventDefault();
+      if (LIB.current < 0 && LIB.cued >= 0) playTrack(LIB.cued); else player.paused ? player.play() : player.pause(); }
     if (k === 'arrowright'){ if (e.shiftKey) player.currentTime = Math.min((player.duration || 1e9), player.currentTime + 10); else nextTrack(1); }
     if (k === 'arrowleft'){ if (e.shiftKey) player.currentTime = Math.max(0, player.currentTime - 10); else nextTrack(-1); }
     if (k === 'arrowup'){ e.preventDefault(); window.__setVol(player.volume + 0.05); }
