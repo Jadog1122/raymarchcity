@@ -7,7 +7,7 @@
 //             refuses to store partial (206) responses — so the first play streams straight
 //             through untouched while one full copy is fetched in the background for next time
 //   manifest  network first: a stale manifest would list tracks that are not there any more
-const VER = 'nightcity-v1';
+const VER = 'nightcity-v2';   // v1 keyed every navigation under './'
 const CDN = 'https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js';
 
 self.addEventListener('install', e => {
@@ -59,8 +59,8 @@ self.addEventListener('fetch', e => {
   if (e.request.mode === 'navigate' || /\/(index\.html)?(\?|$)/.test(u)){
     e.respondWith((async () => {
       const c = await caches.open(VER);
-      try { const net = await fetch(e.request); if (net.ok) c.put('./', net.clone()); return net; }
-      catch { return (await c.match('./')) || Response.error(); }
+      try { const net = await fetch(e.request); if (net.ok) c.put(e.request, net.clone()); return net; }
+      catch { return (await c.match(e.request)) || (await c.match('./')) || Response.error(); }
     })());
   }
 });

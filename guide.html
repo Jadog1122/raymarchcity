@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>夜城是怎么造出来的 · NIGHT CITY 导览</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2Fsvg%27%20viewBox%3D%270%200%2032%2032%27%3E%3Crect%20width%3D%2732%27%20height%3D%2732%27%20fill%3D%27%23080b12%27%2F%3E%3C%2Fsvg%3E">
+<style>
+  :root{--bg:#080b12;--card:#0d1119;--ink:#e8e2d8;--dim:#9aa2ad;--amber:#ffb870;--pink:#ff3caa;--cyan:#35d6e8;--line:rgba(207,211,216,.14)}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.85 -apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+  .wrap{max-width:720px;margin:0 auto;padding:28px 20px 80px}
+  h1{font-weight:300;font-size:30px;letter-spacing:.18em;margin:26px 0 4px;color:var(--ink)}
+  .sub{color:var(--dim);margin:0 0 34px}
+  h2{font-weight:500;font-size:21px;margin:52px 0 12px;color:var(--amber)}
+  h2 .n{opacity:.5;font-variant-numeric:tabular-nums;margin-right:10px}
+  p{margin:12px 0}
+  b{color:var(--ink)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:16px 18px;margin:18px 0}
+  .card p{margin:8px 0}
+  .kid{border-left:3px solid var(--cyan);padding-left:14px;color:var(--dim)}
+  .kid b{color:var(--cyan)}
+  figure{margin:20px 0}
+  figcaption{color:var(--dim);font-size:13px;margin-top:8px;text-align:center}
+  svg{width:100%;height:auto;display:block;background:#0a0e16;border:1px solid var(--line);border-radius:8px}
+  .num{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:20px 0}
+  .num div{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px 10px;text-align:center}
+  .num b{display:block;font-size:26px;color:var(--amber);font-weight:400;font-variant-numeric:tabular-nums}
+  .num span{font-size:13px;color:var(--dim)}
+  a{color:var(--cyan);text-decoration:none;border-bottom:1px solid rgba(53,214,232,.3)}
+  .go{display:inline-block;margin:8px 8px 0 0;padding:11px 20px;border:1px solid var(--amber);border-radius:4px;color:var(--amber);border-bottom-width:1px}
+  kbd{background:rgba(207,211,216,.12);border:1px solid var(--line);border-radius:4px;padding:1px 7px;font:13px inherit}
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  td{padding:7px 8px;border-bottom:1px solid var(--line)}
+  td:first-child{color:var(--amber);white-space:nowrap}
+  .story{margin:14px 0;padding:14px 16px;background:var(--card);border:1px solid var(--line);border-radius:8px}
+  .story b:first-child{color:var(--pink)}
+  footer{margin-top:70px;color:var(--dim);font-size:13px;border-top:1px solid var(--line);padding-top:18px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>NIGHT CITY</h1>
+<p class="sub">一座跟着音乐呼吸的雨夜城市 —— 它是怎么工作的，我们又是怎么把它造出来的。<br>（写给十岁的你，也写给所有好奇的人。）</p>
+
+<p><a class="go" href="https://jadog1122.github.io/raymarchcity/">▶ 先去玩一下再回来读</a></p>
+<p class="kid">打开之后<b>点屏幕任意一个地方</b>，音乐就开始了，城市会跟着节拍亮起来。手机竖着开也可以。</p>
+
+<h2><span class="n">01</span>它不是视频，也不是普通的游戏</h2>
+<p>你在屏幕上看到的每一帧画面，都是<b>在你看它的那一刻现场算出来的</b>。没有一秒钟是提前录好的。你关掉再打开，雨落的位置、车开的地方，都是重新算的。</p>
+<p>普通的 3D 游戏像<b>搭乐高</b>：美术师先做好每一栋楼的模型、贴好每一张贴图，游戏再把它们摆出来。这个项目连一块"乐高"都没有 —— <b>模型文件的数量是 0</b>。</p>
+<div class="card kid"><p>那楼是从哪来的？<b>整座城市只是一道数学题。</b>你问它："从这里往那个方向看，最近会撞到什么？" 它就能算出答案：一面墙、一块招牌、或者湿漉漉的马路。把这道题问上几千万遍，答案拼在一起，就是你看到的画面。</p></div>
+
+<h2><span class="n">02</span>每个像素，是一束手电筒的光</h2>
+<p>你的屏幕由很多小点组成，每个点叫一个<b>像素</b>。画一帧的时候，计算机从"眼睛"的位置，<b>朝每一个像素的方向射出一束看不见的光线</b>，问：这束光会撞到什么？撞到窗户，这个点就画成暖黄色；撞到霓虹灯，就画成粉色；什么都没撞到，就是夜空。</p>
+<p>这个办法叫 <b>raymarching（光线行进）</b>。像蝙蝠的回声定位：喊一声，听回声，就知道前面有什么、离多远。</p>
+<figure>
+<svg viewBox="0 0 700 240" xmlns="http://www.w3.org/2000/svg">
+  <circle cx="60" cy="120" r="14" fill="none" stroke="#e8e2d8" stroke-width="2"/>
+  <circle cx="65" cy="117" r="3" fill="#e8e2d8"/>
+  <text x="60" y="160" fill="#9aa2ad" font-size="13" text-anchor="middle">眼睛</text>
+  <rect x="130" y="55" width="8" height="130" fill="none" stroke="#9aa2ad" stroke-width="1.5"/>
+  <text x="134" y="205" fill="#9aa2ad" font-size="13" text-anchor="middle">屏幕</text>
+  <line x1="74" y1="114" x2="134" y2="80" stroke="#ffb870" stroke-width="1.5"/>
+  <line x1="134" y1="80" x2="470" y2="52" stroke="#ffb870" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <line x1="74" y1="120" x2="134" y2="122" stroke="#35d6e8" stroke-width="1.5"/>
+  <line x1="134" y1="122" x2="560" y2="128" stroke="#35d6e8" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <line x1="74" y1="126" x2="134" y2="165" stroke="#ff3caa" stroke-width="1.5"/>
+  <line x1="134" y1="165" x2="380" y2="196" stroke="#ff3caa" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <rect x="470" y="30" width="60" height="160" fill="#131a26" stroke="#9aa2ad" stroke-width="1"/>
+  <rect x="482" y="46" width="12" height="9" fill="#ffb870"/><rect x="504" y="46" width="12" height="9" fill="#131a26" stroke="#333"/>
+  <rect x="482" y="66" width="12" height="9" fill="#131a26" stroke="#333"/><rect x="504" y="66" width="12" height="9" fill="#ffb870"/>
+  <rect x="560" y="80" width="70" height="110" fill="#131a26" stroke="#9aa2ad" stroke-width="1"/>
+  <rect x="572" y="96" width="14" height="34" fill="#ff3caa" opacity=".9"/>
+  <text x="595" y="118" fill="#35d6e8" font-size="12">☂</text>
+  <rect x="340" y="190" width="80" height="10" fill="#0f141d" stroke="#333"/>
+  <text x="350" y="228" fill="#9aa2ad" font-size="13">湿马路（会照出倒影）</text>
+  <text x="486" y="22" fill="#9aa2ad" font-size="13">每束光问一句：我撞到了什么？</text>
+</svg>
+<figcaption>一帧 = 几十万束光线各自出发，各自带一个颜色回来。每秒画三十到六十帧。</figcaption>
+</figure>
+<div class="card kid"><p>算一算：一帧几十万束光 × 每秒几十帧 ≈ <b>每秒几千万次"我撞到了什么"</b>。这就是为什么它需要显卡帮忙 —— 显卡最擅长的就是同时做几百万道一样的小题。</p></div>
+
+<h2><span class="n">03</span>光线怎么在城里走：跳格子</h2>
+<p>光线不是一毫米一毫米地挪 —— 那太慢了。整座城被切成 <b>8 米 × 8 米的方格</b>，像一张大棋盘，每格里最多放一栋楼。光线<b>一格一格跳</b>，每到一格只问一句："这格里的楼挡住我了吗？"没挡住，跳下一格。</p>
+<figure>
+<svg viewBox="0 0 700 200" xmlns="http://www.w3.org/2000/svg">
+  <g stroke="#232a36" stroke-width="1">
+    <line x1="100" y1="20" x2="100" y2="180"/><line x1="200" y1="20" x2="200" y2="180"/><line x1="300" y1="20" x2="300" y2="180"/><line x1="400" y1="20" x2="400" y2="180"/><line x1="500" y1="20" x2="500" y2="180"/><line x1="600" y1="20" x2="600" y2="180"/>
+    <line x1="20" y1="60" x2="680" y2="60"/><line x1="20" y1="120" x2="680" y2="120"/>
+  </g>
+  <rect x="315" y="70" width="70" height="44" fill="#131a26" stroke="#9aa2ad"/>
+  <rect x="522" y="66" width="56" height="48" fill="#131a26" stroke="#9aa2ad"/>
+  <rect x="536" y="76" width="10" height="8" fill="#ffb870"/>
+  <line x1="30" y1="150" x2="140" y2="128" stroke="#35d6e8" stroke-width="2"/>
+  <line x1="140" y1="128" x2="250" y2="106" stroke="#35d6e8" stroke-width="2"/>
+  <line x1="250" y1="106" x2="330" y2="90" stroke="#35d6e8" stroke-width="2"/>
+  <circle cx="140" cy="128" r="4" fill="#35d6e8"/><circle cx="250" cy="106" r="4" fill="#35d6e8"/>
+  <circle cx="330" cy="90" r="6" fill="#ff3caa"/>
+  <text x="140" y="115" fill="#9aa2ad" font-size="12" text-anchor="middle">这格是空的，跳！</text>
+  <text x="250" y="93" fill="#9aa2ad" font-size="12" text-anchor="middle">还是空的，跳！</text>
+  <text x="345" y="135" fill="#ff3caa" font-size="12">撞到了！这是一面墙</text>
+</svg>
+<figcaption>跳格子（工程师叫它 DDA）。跳 5 次能顶挪 5000 次，画面就快了。</figcaption>
+</figure>
+
+<h2><span class="n">04</span>城市是掷骰子长出来的</h2>
+<p>没有人一栋一栋摆过这些楼。每个格子的楼有多高、开多少窗、挂不挂招牌，都是<b>掷骰子</b>决定的 —— 但这是一种<b>有记性的骰子</b>（工程师叫它<b>哈希</b>）：同一个路口，永远掷出同一个数。所以这座城既是随机长出来的，又<b>每次打开都长得一模一样</b>。你熟悉的那个粉色招牌，明天还在那个街角。</p>
+<p>骰子还决定<b>街区的性格</b>：这一片掷出"商务区"就全是玻璃高楼，那一片掷出"霓虹街"就挤满招牌，再往外是灯很少的工业带 —— 就像真的城市。</p>
+
+<h2><span class="n">05</span>音乐怎么变成光</h2>
+<p>页面一边放歌，一边<b>把声音拆开看</b>：低音（咚咚）、中音（人声）、高音（镲片），有点像把白光分成彩虹。低音推着镜头走，高音让雨丝更亮。</p>
+<p>它还会自己<b>找歌的心跳</b>（节拍）。每跳一下，就有<b>一圈看不见的光</b>从你脚下往外跑，速度是每秒 40 米 —— 光圈跑到哪，哪栋楼的窗户就"啪"地亮一下，再慢慢暗回去。</p>
+<figure>
+<svg viewBox="0 0 700 210" xmlns="http://www.w3.org/2000/svg">
+  <g fill="#131a26" stroke="#9aa2ad" stroke-width="1">
+    <rect x="60" y="70" width="46" height="110"/><rect x="150" y="40" width="52" height="140"/><rect x="250" y="90" width="40" height="90"/><rect x="330" y="55" width="50" height="125"/><rect x="430" y="80" width="44" height="100"/><rect x="520" y="45" width="54" height="135"/><rect x="620" y="95" width="40" height="85"/>
+  </g>
+  <g fill="#ffb870"><rect x="68" y="86" width="8" height="7"/><rect x="86" y="110" width="8" height="7"/><rect x="160" y="60" width="9" height="7"/><rect x="182" y="88" width="9" height="7"/><rect x="160" y="120" width="9" height="7"/><rect x="258" y="104" width="8" height="7"/></g>
+  <g fill="#1c2431"><rect x="340" y="70" width="9" height="7"/><rect x="362" y="98" width="9" height="7"/><rect x="440" y="96" width="8" height="7"/><rect x="530" y="62" width="9" height="7"/><rect x="552" y="90" width="9" height="7"/><rect x="628" y="108" width="8" height="7"/></g>
+  <ellipse cx="120" cy="185" rx="180" ry="26" fill="none" stroke="#35d6e8" stroke-width="2" opacity=".9"/>
+  <ellipse cx="120" cy="185" rx="90" ry="13" fill="none" stroke="#35d6e8" stroke-width="1" opacity=".35"/>
+  <circle cx="120" cy="185" r="5" fill="#e8e2d8"/>
+  <text x="120" y="205" fill="#9aa2ad" font-size="12" text-anchor="middle">你（听歌的地方）</text>
+  <text x="318" y="196" fill="#35d6e8" font-size="12">← 每一拍，一圈光往外跑</text>
+  <text x="150" y="26" fill="#9aa2ad" font-size="13">光圈跑过的楼：窗户亮了</text>
+  <text x="470" y="26" fill="#9aa2ad" font-size="13">还没跑到的楼：先黑着等</text>
+</svg>
+<figcaption>节拍环。歌越快，光圈追得越急，整座城像在呼吸。</figcaption>
+</figure>
+<div class="card kid"><p>还有一个小魔法：路边每一根霓虹灯管都被当成<b>一小段太阳</b>来算，所以粉色的灯是<b>真的</b>把对面的墙照成了粉色 —— 不是我们拿粉色笔涂上去的。</p></div>
+
+<h2><span class="n">06</span>我们是怎么把它造出来的</h2>
+<p>不是一口气写完的。是<b>改一点 → 检查 → 记错 → 再改一点</b>，转了 33 圈（每一圈叫一个"里程碑"），一共提交了 139 次。两件"武器"最重要：</p>
+
+<div class="card">
+<p><b>① 机器人质检员。</b>每次改完，一个自动程序会打开页面，站在城里 <b>13 个固定的位置</b>拍照：老城、车站、闹市、工业带、高空……然后拿尺子量每一张：最暗的地方够不够黑？最亮的地方够不够亮？有没有出现不该有的颜色？<b>只要有一项不合格，这次修改就不算完成</b>，不能说"应该可以了"。它还会假装成手机、假装成访客，点一下看音乐响不响。</p>
+<p><b>② 错题本。</b>每次出错 —— 哪怕是很蠢的错 —— 都写下来：出了什么事、真正的原因、怎么修的、下次怎么提前躲开。写到今天是 <b>53 条</b>。错题慢慢变成了规则，规则让后面的错越来越少。</p>
+</div>
+
+<p>挑三个错题本里最好玩的故事：</p>
+<div class="story"><b>找不到的月亮。</b>我们画了个月亮，结果满屏找不到。后来发现真月亮挂在了画面外面，而我们一直盯着的那个"月亮"，其实是一架飞机的灯被镜头拉出的光斑。教训：<b>想让什么出现在画面里，先用数学算它会落在屏幕哪儿，别用眼睛猜。</b></div>
+<div class="story"><b>全城的招牌都是反的。</b>招牌上的日文字太小太糊，我们盯着看了四遍，得出四个不同的结论。最后往字的位置画了"左红右蓝"两根色条 —— 一眼看穿：81 块竖招牌<b>全部左右镜像了</b>。教训：<b>看不清的东西别硬看，造一个一眼能分辨的记号。</b></div>
+<div class="story"><b>从来没亮过的灯。</b>做到最后我们才发现：负责"让灯发光晕"的那一步，<b>从项目第一天起就没执行过</b> —— 因为犯了一条规矩（一边往画上画、一边又在看这张画，计算机就悄悄罢工，只留了一行小字警告）。我们一直以为那行警告"没关系"。教训：<b>警告分两种，"提醒你一下"和"这件事我根本没做"—— 要分清。</b></div>
+
+<h2><span class="n">07</span>几个数字</h2>
+<div class="num">
+  <div><b>1</b><span>个文件装下整座城</span></div>
+  <div><b>0</b><span>个 3D 模型</span></div>
+  <div><b>3638</b><span>行代码（2360 行是"数学题"）</span></div>
+  <div><b>13</b><span>张质检照片，每次全过才算完成</span></div>
+  <div><b>53</b><span>条错题记录</span></div>
+  <div><b>139</b><span>次提交，33 个里程碑</span></div>
+</div>
+
+<h2><span class="n">08</span>怎么玩</h2>
+<div class="card">
+<p><b>打开就点一下</b>，默认的歌就开始放。手机竖屏横屏都行，第二次打开几乎是秒开（页面会把自己存在你手机里）。</p>
+<p><b>放你自己的歌</b>：电脑上把 mp3 直接拖进窗口；手机上点「文件」选一首。你的歌只存在你自己的浏览器里，不会上传到任何地方。</p>
+<table>
+  <tr><td>空格</td><td>播放 / 暂停</td></tr>
+  <tr><td>L</td><td>歌单</td></tr>
+  <tr><td>← →</td><td>上一首 / 下一首</td></tr>
+  <tr><td>F</td><td>全屏</td></tr>
+  <tr><td>S</td><td>把这一帧存成图片</td></tr>
+  <tr><td>R</td><td>录 30 秒视频</td></tr>
+  <tr><td>画质滑块</td><td>往左更流畅，往右更清晰。不动它，它会自己找到你这台机器最舒服的档位</td></tr>
+</table>
+</div>
+
+<p style="margin-top:34px"><a class="go" href="https://jadog1122.github.io/raymarchcity/">▶ 去看夜城</a><a class="go" href="https://github.com/Jadog1122/raymarchcity" style="color:var(--dim);border-color:var(--line)">源代码 · GitHub</a></p>
+
+<footer>NIGHT CITY —— 站上默认播放的两首是 Jadog 的翻唱/改编（原曲：Daniel Caesar《Superpowers》、張惠妹《記得》），词曲版权属于原作者。这页导览和整座城一样，也只是一个 HTML 文件。</footer>
+</div>
+</body>
+</html>

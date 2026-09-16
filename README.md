@@ -2,7 +2,9 @@
 
 音频驱动的 raymarching 夜城。整座城市——楼、招牌、路面、车流、雨、雾、霓虹——都在**一个 fragment shader** 里算出来，没有一个模型文件。丢一首歌进窗口，城市跟着节拍呼吸。
 
-**在线**：<https://jadog1122.github.io/raymarchcity/>（需要 WebGL2 桌面浏览器；打开后把 mp3 拖进窗口）
+**在线**：<https://jadog1122.github.io/raymarchcity/>（桌面、手机都行，打开点一下就放）
+
+**它是怎么工作的（写给十岁小孩的导览）**：<https://jadog1122.github.io/raymarchcity/guide.html>
 
 ![](docs/hero.png)
 
