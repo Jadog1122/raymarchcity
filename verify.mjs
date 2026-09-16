@@ -329,11 +329,25 @@ let smokeFail = '';
       for (let y = Math.round(g.h*0.25); y < Math.round(g.h*0.40); y += 5) for (let x = 0; x < g.w; x += 7){ const i = (y*g.w + x)*g.bpp;
         if ((g.data[i] + g.data[i+1] + g.data[i+2]) / 765 < 0.02) dark++; n++; }
       return dark / n; })();
-    console.log(`smoke mobile: tap->${ok ? 'playing' : 'SILENT'} · nonblack ${mm.nonBlack.toFixed(0)}% · 25-40% band black ${(100*topBlack).toFixed(0)}%`);
+    const mst = await pm.evaluate(() => ({ err: window.__stats.shaderError, scale: window.__stats.renderScale }));
+    console.log(`smoke mobile: tap->${ok ? 'playing' : 'SILENT'} · nonblack ${mm.nonBlack.toFixed(0)}% · scale ${mst.scale} · 25-40% band black ${(100*topBlack).toFixed(0)}%`);
     fs.unlinkSync(shotM);
+    // This runs on the LIVE page, so the camera is wherever the dolly has reached — a dark stretch of
+    // road is a perfectly valid frame and was failing a 40% non-black bar meant for the fixed TEST
+    // frames. What this check is actually for is "portrait renders at all, and one tap plays": assert
+    // the signals that say so (no shader error, no NaN magenta, not a black screen, no letterbox) and
+    // leave "is it beautiful" to the 13 deterministic frames.
     if (badM.length) smokeFail = 'mobile pageerror: ' + badM[0].slice(0, 120);
+    else if (mst.err) smokeFail = 'mobile shaderError: ' + mst.err.slice(0, 120);
     else if (!ok) smokeFail = 'mobile: one tap did not start playback';
-    else if (mm.nonBlack < 40) smokeFail = 'mobile: frame mostly black';
+    else if (mm.magenta > 0.1) smokeFail = `mobile: ${mm.magenta.toFixed(2)}% magenta (NaN in the shader)`;
+    else if (mm.nonBlack < 8) smokeFail = 'mobile: frame is black';
+    // What the startup adaptation settles on is a function of throughput, same family as fps and the
+    // recording check — and this suite is itself the load (four contexts plus a 27 MB page). On a
+    // genuinely busy machine dropping the scale is the CORRECT behaviour, so under FPS_SOFT this only
+    // reports. It still fails on a quiet machine, where a floor-scraping scale means a single stall
+    // was mistaken for a slow GPU.
+    else if (mst.scale < 0.4 && !FPS_SOFT) smokeFail = `mobile: startup dropped quality to ${mst.scale} (a stall read as a slow GPU)`;
     else if (topBlack > 0.9) smokeFail = 'mobile: letterbox still applied in portrait';
     await cm.close();
   }

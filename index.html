@@ -2558,6 +2558,7 @@ const SIGN_WORDS = [
   ['青果', '#15803d', '#dcfce7'],   ['鮮魚', '#0e7490', '#cffafe'],     ['珈琲', '#6b3f1d', '#f5e6d3'],
   ['甘味', '#db2777', '#fce7f3']
 ];
+const __atlasT0 = performance.now();
 const signCanvas = document.createElement('canvas');
 signCanvas.width = SIGN_COLS * SIGN_CW; signCanvas.height = SIGN_ROWS * SIGN_CH;
 {
@@ -2632,6 +2633,7 @@ hsignCanvas.width = HS_COLS * HS_CW; hsignCanvas.height = HS_ROWS * HS_CH;
 const hsignTex = new THREE.CanvasTexture(hsignCanvas);
 hsignTex.minFilter = THREE.LinearMipmapLinearFilter; hsignTex.magFilter = THREE.LinearFilter;
 hsignTex.generateMipmaps = true; hsignTex.anisotropy = 4; hsignTex.needsUpdate = true;
+stats.atlasMs = Math.round(performance.now() - __atlasT0);   // the one genuinely one-time dice roll
 
 const signTex = new THREE.CanvasTexture(signCanvas);
 signTex.minFilter = THREE.LinearMipmapLinearFilter; signTex.magFilter = THREE.LinearFilter;
@@ -2859,7 +2861,7 @@ const statLine = document.getElementById('statLine');
 // The floor is 0.6 because for a slow dolly a sharp 35 fps beats a soft 50 — but if 0.6 cannot even
 // hold 26 fps then the machine wins and the floor gives way, because a stuttering dolly is worse than
 // a soft one and no amount of sharpness rescues it.
-let lowSec = 0, highSec = 0, stuckSec = 0, manualScale = 0;   // manualScale != 0 pins it and stops adapting
+let lowSec = 0, highSec = 0, stuckSec = 0, manualScale = 0, slowRun = 0;   // manualScale != 0 pins it and stops adapting
 function adaptScale(fps){
   if (TEST || manualScale > 0.0) return;
   lowSec  = fps < 44 ? lowSec + 1 : 0;
@@ -3479,11 +3481,21 @@ function frame(now){
   // cost, so while the page is still starting, act on it directly: down hard when it is slow, and back
   // up quickly when it is not, so a fast machine loses only a few soft frames.
   if (!TEST && manualScale === 0 && stats.frames < 150){
-    if (dt > 45 && renderScale > 0.26){
-      scaleFloor = Math.min(scaleFloor, 0.25);
-      window.__setRenderScale(renderScale * (dt > 250 ? 0.55 : 0.85));
-    } else if (dt < 19 && renderScale < 1.0){
-      window.__setRenderScale(Math.min(1.0, renderScale * 1.18));
+    // dt is wall-clock between frames, which conflates two different things: "this machine renders
+    // slowly" and "the browser did not call us". A shader-compile stall, a GC pause or an occluded
+    // window each produce one enormous sample, and reacting to it slammed quality to the floor on a
+    // machine that was never slow. So: ignore samples too large to be rendering at all, and require
+    // three slow frames in a row — a slow GPU produces those, a one-off stall does not.
+    if (dt > 1000) slowRun = 0;
+    else if (dt > 45){
+      if (++slowRun >= 3 && renderScale > 0.26){
+        scaleFloor = Math.min(scaleFloor, 0.25);
+        window.__setRenderScale(renderScale * (dt > 250 ? 0.55 : 0.85));
+        slowRun = 0;
+      }
+    } else {
+      slowRun = 0;
+      if (dt < 19 && renderScale < 1.0) window.__setRenderScale(Math.min(1.0, renderScale * 1.18));
     }
   }
 
@@ -3589,7 +3601,7 @@ async function bootAudio(){
   await painted();                                            // the message must be on screen first
   bootAt(26, '编译着色器…（第一次打开最慢）');
   await painted();
-  const t = performance.now();
+  let t = performance.now();
   try {
     // compileAsync uses KHR_parallel_shader_compile where it exists, so the page stays alive and the
     // bar can still move. But the promise RESOLVING is itself not guaranteed — it has starved forever
@@ -3601,7 +3613,9 @@ async function bootAudio(){
         (async () => { await renderer.compileAsync(sceneRT, cam); await renderer.compileAsync(scenePost, cam); return 'ok'; })(),
         new Promise(res => setTimeout(() => res('stuck'), 4000)),
       ]);
-      if (r === 'stuck'){ renderer.compile(sceneRT, cam); renderer.compile(scenePost, cam); }
+      // the watchdog firing means the promise starved, not that the shader is slow to build —
+      // report what the compile actually costs, or the diagnostic blames the wrong thing
+      if (r === 'stuck'){ t = performance.now(); renderer.compile(sceneRT, cam); renderer.compile(scenePost, cam); }
     }
     else { renderer.compile(sceneRT, cam); renderer.compile(scenePost, cam); }
   } catch (e){ stats.shaderError = (stats.shaderError + '\n' + (e && e.message || e)).trim(); }
