@@ -135,7 +135,7 @@ function flickerBetween(a, b) {
 }
 
 const fails = [];
-const browser = await chromium.launch({ headless: false, args: ['--ignore-gpu-blocklist', '--enable-gpu-rasterization', '--autoplay-policy=no-user-gesture-required'] });
+const browser = await chromium.launch({ headless: false, args: ['--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding', '--ignore-gpu-blocklist', '--enable-gpu-rasterization', '--autoplay-policy=no-user-gesture-required'] });
 const ctx = await browser.newContext({ viewport: { width: 1720, height: 720 }, deviceScaleFactor: 2 });
 const page = await ctx.newPage();
 const consoleErrors = [];
@@ -301,6 +301,42 @@ let smokeFail = '';
     }
   }
   await c2.close();
+
+  // Phone smoke: portrait 390x844@3 with touch. Portrait must be full-bleed (the letterbox is a
+  // landscape idea — bars would leave a 390x163 slit), and one tap anywhere must start playback,
+  // exactly like the desktop click. Layout is CSS; this asserts the behaviour, not the styling.
+  if (!smokeFail && served) {
+    const cm = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 3, hasTouch: true, isMobile: true });
+    const pm = await cm.newPage();
+    const badM = [];
+    pm.on('pageerror', e => badM.push(e.message));
+    await pm.goto('http://127.0.0.1:5173/index.html');
+    await pm.waitForFunction(() => window.__lib && window.__stats && document.querySelectorAll('.track').length > 0, null, { timeout: 20000 }).catch(() => {});
+    await pm.touchscreen.tap(195, 260);
+    const ok = await pm.waitForFunction(() => !player.paused && player.currentTime > 0.05, null, { timeout: 10000 }).then(() => true).catch(() => false);
+    // Playback opens on a 2 s fade from black, and uMood.w's INITIAL value is already 1 — waiting on
+    // it alone passes instantly with zero frames rendered. Wait for both real things: frames actually
+    // advancing (the compile watchdog can hold the first one back ~4 s) and the fade done.
+    await pm.waitForFunction(() => window.__stats.frames > 30 && window.__u.uMood.value.w > 0.95, null, { timeout: 15000 }).catch(() => {});
+    await pm.waitForTimeout(300);
+    const shotM = 'shots/suite/_mobile.png';
+    await pm.screenshot({ path: shotM });
+    const mm = measure(shotM);
+    // The very top rows are zenith sky and genuinely near-black at night — sampling them said
+    // "letterbox" about a working frame. Sample the band at 25-40% height instead: in portrait that
+    // band holds the skyline, and under a letterbox it would sit inside the top bar as pure zeros.
+    const topBlack = (() => { const g = mm.png; let dark = 0, n = 0;
+      for (let y = Math.round(g.h*0.25); y < Math.round(g.h*0.40); y += 5) for (let x = 0; x < g.w; x += 7){ const i = (y*g.w + x)*g.bpp;
+        if ((g.data[i] + g.data[i+1] + g.data[i+2]) / 765 < 0.02) dark++; n++; }
+      return dark / n; })();
+    console.log(`smoke mobile: tap->${ok ? 'playing' : 'SILENT'} · nonblack ${mm.nonBlack.toFixed(0)}% · 25-40% band black ${(100*topBlack).toFixed(0)}%`);
+    fs.unlinkSync(shotM);
+    if (badM.length) smokeFail = 'mobile pageerror: ' + badM[0].slice(0, 120);
+    else if (!ok) smokeFail = 'mobile: one tap did not start playback';
+    else if (mm.nonBlack < 40) smokeFail = 'mobile: frame mostly black';
+    else if (topBlack > 0.9) smokeFail = 'mobile: letterbox still applied in portrait';
+    await cm.close();
+  }
 }
 if (smokeFail) fails.push(smokeFail);
 

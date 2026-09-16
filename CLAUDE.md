@@ -113,3 +113,11 @@
 - `FPS_SOFT` 必须真的软：吞吐量检查里没接住的超时会崩掉整轮，等于这个开关不存在。
 - 「打开就能听到」有平台下限：手势之前不可能发声。能做的是落地即预选 + `preload='auto'` 预缓冲，第一次 pointerdown 就出声（0.07s）。设 src / 预加载不需要手势，只有 play 需要。
 - 端到端检查里每加一步都要问「它给后面留下了什么状态」：开始播放会隐藏 overlay，后面依赖歌单可见的断言就会超时。按用户的操作方式恢复状态（按 L），不要改 class。
+
+## 手机（M33）
+- 射线归一化 `/min(iResolution.x, iResolution.y)`：横屏锁垂直视场（等价旧行为），竖屏锁水平视场。同一归一化贯穿场景、px 尺寸、TAA 正/逆投影、字幕排版五处，漏一处竖屏 TAA 拖影。
+- 2.39 黑边只在横屏（`uRes.x > uRes.y`）；竖屏全出血。手机布局纯 CSS：`@media (max-width:700px), (max-height:500px)`——横屏手机要靠高度条件兜住。调参滑块/键位说明标 `.dev`，手机藏掉。
+- `sw.js` 只在 https 注册（localhost 上过期缓存页会把旧代码喂给 verify；file:// 无 SW）。音频 cache-first + Range 切片（Cache API 拒存 206：首播透传流，后台拉完整体，之后从缓存切 206）；页面和 manifest network-first。
+- 三个不保证发生的异步，boot 路径必须全有兜底：compileAsync 可能永不返回（4s 看门狗退同步）；iOS 手势前拒绝缓冲媒体（2.5s 无字节即结束该阶段）；被遮挡窗口 rAF 为 0 而 document.hidden 仍是 false（verify 加 --disable-backgrounding-occluded-windows；rec 时好时坏的真因）。
+- 断言一个信号前先查它的初始值和默认分支：uMood.w 初始就是 1，零帧也能通过「淡入完成」。等「帧数在涨」这类只会由真渲染推进的量。
+- 老 GPU：半浮点 RT 探针失败就全链退 8-bit，诊断行标 LDR fallback。
