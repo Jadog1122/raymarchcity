@@ -193,3 +193,8 @@ M8 决策：
 - sw.js：重访 169ms 可用；音频 Range 从缓存切 206；蜂窝模拟冷点按 137ms 出声
 - compileAsync 看门狗 / iOS 缓冲兜底 / 遮挡窗口 rAF（rec 时好时坏真因）；老 GPU 半浮点探针退 8-bit
 - 实耗约 2.2h（21:13 提交）；真机 GPU 与 iOS Safari 音频路径未实测，诊断行留在屏上
+
+## M35 导览页封板：双语 + Pico CSS 换壳（2026-09-16）✅
+- 内容冻结不动；中英成对存放（.zh/.en），一个属性切换含 SVG 标签，无 JS 也能读中文
+- 首访跟浏览器语言，选择存 localStorage；UI 基于 Pico CSS 2.0.6（MIT，锁版本）覆夜城配色
+- 轻交互：阅读进度条、章节滚入、数字计数、故事折叠；全部尊重 prefers-reduced-motion
