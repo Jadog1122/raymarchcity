@@ -59,6 +59,11 @@
   button{background:rgba(20,24,32,.7);color:#cfd3d8;border:1px solid rgba(207,211,216,.25);padding:6px 12px;font:12px inherit;cursor:pointer;border-radius:3px}
   button:hover{border-color:#ffb870}
   button.on{border-color:#ffb870;color:#ffb870}
+  #guideLink{font-size:12px;color:rgba(53,214,232,.8);letter-spacing:.04em;text-decoration:none;
+    border-bottom:1px solid rgba(53,214,232,.3);padding-bottom:1px;transition:color .2s}
+  #guideLink:hover{color:#35d6e8}
+  #guideRow{margin-top:6px;font-size:11px}
+  #guideRow a{color:rgba(53,214,232,.7);text-decoration:none}
   #picker .track.cued{border-color:rgba(255,184,112,.55);background:rgba(255,184,112,.07)}
   /* Phones. Layout only — nothing about rendering changes here. The 220px desktop panel becomes a
      bottom sheet, tap targets grow past 40px, the picker fits the width, the fps line goes away. */
@@ -91,6 +96,7 @@
   <div id="boot"><div id="bootBar"><i></i></div><p id="bootMsg">加载引擎…</p></div>
   <div id="picker"></div>
   <p id="pickerHint">读取歌单…</p>
+  <a id="guideLink" href="https://jadog1122.github.io/raymarchcity/guide.html" target="_blank" rel="noopener">这座城是怎么画出来的？ · How does this work? →</a>
 </div>
 <div id="panel" class="hidden">
   <div id="nowPlaying" title="点击暂停 / 继续 · 拖进度条跳转"><div class="r"><span id="npTitle">—</span><span id="npLrc"></span></div><div class="r"><span class="bar"><i id="npBar"></i></span><span id="npTime" style="font-variant-numeric:tabular-nums;font-size:11px">0:00</span></div></div>
@@ -112,6 +118,7 @@
   <div class="stat" id="statLine">fps – · scale 0.75</div>
   <div class="keys">空格 播放/暂停 · L 歌单 · ← → 切歌 · ⇧← ⇧→ ±10s · ↑ ↓ 音量 · F 全屏 · S 存帧 · H 隐藏 · R 录 30s</div>
   <div class="keys">画质滑块：左＝流畅，右＝清晰。到「原生」才是屏幕的真实分辨率</div>
+  <div id="guideRow"><a href="https://jadog1122.github.io/raymarchcity/guide.html" target="_blank" rel="noopener">这座城是怎么画出来的 → 导览 / Guide</a></div>
 </div>
 <div id="bars" class="hidden"><i></i><i></i><i></i><i></i><i></i></div>
 <div id="title">NIGHT CITY</div>
